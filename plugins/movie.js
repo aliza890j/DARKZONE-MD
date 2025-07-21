@@ -1,85 +1,66 @@
 const axios = require('axios');
 const { cmd } = require('../command');
+const fs = require('fs');
+const { promisify } = require('util');
+const writeFileAsync = promisify(fs.writeFile);
 
 cmd({
     pattern: "movie",
-    desc: "Search and download movies",
+    desc: "Get and send movie directly",
     category: "utility",
-    react: "🎬",
-    filename: __filename
-},
-async (conn, mek, m, { from, reply, sender, args }) => {
+    react: "🎬"
+}, async (conn, mek, m, { from, reply, args }) => {
     try {
-        const movieName = args.length > 0 ? args.join(' ') : m.text.replace(/^[\.\#\$\!]?movie\s?/i, '').trim();
-        
-        if (!movieName) {
-            return reply("🎥 Please provide a movie name.\nExample: .movie Avengers");
-        }
+        const query = args.join(' ');
+        if (!query) return reply('🎥 Movie name?');
 
-        const options = {
+        // Step 1: Search movie
+        const searchOpts = {
             method: 'GET',
             url: 'https://movie-database-api1.p.rapidapi.com/list_movies.json',
-            params: {
-                query_term: movieName,
-                limit: 1,
-                sort_by: 'download_count'
-            },
+            params: { query_term: query, limit: 1 },
             headers: {
                 'x-rapidapi-host': 'movie-database-api1.p.rapidapi.com',
                 'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
             }
         };
 
-        const response = await axios.request(options);
-        const data = response.data;
+        const searchRes = await axios(searchOpts);
+        if (!searchRes.data.data.movie_count) return reply('❌ Movie not found');
+
+        const movie = searchRes.data.data.movies[0];
         
-        if (!data.data || data.data.movie_count === 0) {
-            return reply("❌ Movie not found. Please try another name.");
-        }
-
-        const movie = data.data.movies[0];
-        const torrents = movie.torrents || [];
+        // Step 2: Get best quality MP4 link
+        const bestMP4 = movie.torrents.find(t => t.url.endsWith('.mp4')) || 
+                       movie.torrents[0];
         
-        // Filter for best quality available
-        const bestQuality = torrents.reduce((best, current) => {
-            if (!best) return current;
-            return (current.quality === '1080p' || 
-                   (current.quality === '720p' && best.quality !== '1080p')) ? current : best;
-        }, null);
+        if (!bestMP4) return reply('⚠️ No downloadable version available');
 
-        let downloadLinks = '';
-        if (bestQuality) {
-            downloadLinks = `\n\n📥 *Download Links:*\n🔹 ${bestQuality.quality}: ${bestQuality.url}`;
-        } else {
-            downloadLinks = '\n\n⚠️ No download links available for this movie';
-        }
+        // Step 3: Download and send
+        reply('⬇️ Downloading... Please wait');
+        
+        const videoRes = await axios({
+            method: 'GET',
+            url: bestMP4.url,
+            responseType: 'arraybuffer'
+        });
 
-        const caption = `
-🎬 *${movie.title}* (${movie.year})
-⭐ Rating: ${movie.rating}/10 | 🕒 Runtime: ${movie.runtime} mins
-🎭 Genre: ${movie.genres.join(', ')}
-
-📝 *Synopsis:* ${movie.synopsis || 'Not available'}
-
-${downloadLinks}
-
-🔍 *IMDb:* https://www.imdb.com/title/${movie.imdb_code}/
-`;
+        const tempPath = `./temp/${movie.id}.mp4`;
+        await writeFileAsync(tempPath, videoRes.data);
 
         await conn.sendMessage(
             from,
-            {
-                image: { url: movie.medium_cover_image },
-                caption: caption,
-                contextInfo: {
-                    mentionedJid: [sender]
-                }
+            { 
+                video: fs.readFileSync(tempPath),
+                caption: `🎬 ${movie.title} (${movie.year})\nQuality: ${bestMP4.quality}`
             },
             { quoted: mek }
         );
 
+        fs.unlinkSync(tempPath); // Clean up
+
     } catch (error) {
-        console.error('Movie error:', error);
+        console.error(error);
         reply(`❌ Error: ${error.message}`);
     }
 });
