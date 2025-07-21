@@ -1,122 +1,119 @@
 const axios = require('axios');
 const { cmd } = require('../command');
 const fs = require('fs');
+const path = require('path');
 const { promisify } = require('util');
 const stream = require('stream');
 const pipeline = promisify(stream.pipeline);
 
+// Config
+const API_KEY = '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100';
+const TEMP_DIR = './temp_movies';
+if (!fs.existsSync(TEMP_DIR)) fs.mkdirSync(TEMP_DIR);
+
 cmd({
     pattern: "movie",
-    desc: "Search and download movies",
-    category: "utility",
-    react: "🎬",
+    desc: "Download movies via IMDb",
+    category: "entertainment",
+    react: "🎥",
     filename: __filename
 },
-async (conn, mek, m, { from, reply, sender, args }) => {
+async (Void, citel, text, { from }) => {
     try {
-        const movieName = args.length > 0 ? args.join(' ') : m.text.replace(/^[\.\#\$\!]?movie\s?/i, '').trim();
-        
-        if (!movieName) {
-            return reply("📽️ Please provide the name of the movie.\nExample: .movie The Shawshank Redemption");
-        }
+        if (!text) return citel.reply("🔍 Please provide a movie name!\nExample: .movie Inception");
 
-        // Step 1: Search for the movie
-        const searchOptions = {
-            method: 'GET',
-            url: 'https://movie-tv-music-search-and-download.p.rapidapi.com/search',
-            params: {
-                query: movieName,
-                type: 'movie'
-            },
-            headers: {
-                'x-rapidapi-host': 'movie-tv-music-search-and-download.p.rapidapi.com',
-                'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
-            }
+        // Step 1: Search Movie
+        const searchUrl = 'https://imdb236.p.rapidapi.com/api/imdb/search';
+        const searchParams = {
+            query: text,
+            type: 'movie',
+            rows: 5
         };
 
-        const searchResponse = await axios.request(searchOptions);
-        const searchResults = searchResponse.data;
-
-        if (!searchResults || searchResults.length === 0) {
-            return reply("🚫 No movies found with that name. Please try another title.");
-        }
-
-        // Get the first result
-        const movie = searchResults[0];
-        
-        // Step 2: Get download links
-        const downloadOptions = {
-            method: 'GET',
-            url: 'https://movie-tv-music-search-and-download.p.rapidapi.com/download',
-            params: {
-                imdb: movie.imdb_id,
-                type: 'movie'
-            },
+        const searchResponse = await axios.get(searchUrl, {
+            params: searchParams,
             headers: {
-                'x-rapidapi-host': 'movie-tv-music-search-and-download.p.rapidapi.com',
-                'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
-            }
-        };
-
-        const downloadResponse = await axios.request(downloadOptions);
-        const downloadLinks = downloadResponse.data;
-
-        if (!downloadLinks || downloadLinks.length === 0) {
-            return reply("⚠️ No download links available for this movie.");
-        }
-
-        // Find the best quality download link
-        const bestQualityLink = downloadLinks.reduce((prev, current) => 
-            (parseInt(current.quality.replace('p', '')) > parseInt(prev.quality.replace('p', ''))) ? current : prev
-        );
-
-        // Step 3: Download the movie
-        reply("⬇️ Downloading movie... Please wait, this may take a while...");
-
-        const tempFilePath = `./temp/${movie.imdb_id}_${bestQualityLink.quality}.mp4`;
-        
-        // Download the file
-        const response = await axios({
-            method: 'GET',
-            url: bestQualityLink.url,
-            responseType: 'stream'
+                'x-rapidapi-host': 'imdb236.p.rapidapi.com',
+                'x-rapidapi-key': API_KEY
+            },
+            timeout: 10000
         });
 
-        await pipeline(
-            response.data,
-            fs.createWriteStream(tempFilePath)
-        );
+        const movies = searchResponse.data?.docs;
+        if (!movies?.length) return citel.reply("❌ No movies found!");
 
-        // Step 4: Send to WhatsApp
-        const fileSize = fs.statSync(tempFilePath).size;
-        const maxSize = 100 * 1024 * 1024; // 100MB (WhatsApp limit)
+        // Get best match (first result)
+        const movie = movies[0];
+        
+        // Step 2: Get Download Links (using external provider)
+        const downloadLinks = await getDownloadLinks(movie.title, movie.year);
+        if (!downloadLinks?.length) return citel.reply("⚠️ No download links available!");
 
-        if (fileSize > maxSize) {
-            fs.unlinkSync(tempFilePath);
-            return reply("⚠️ The movie file is too large to send via WhatsApp. Please try a lower quality.");
-        }
-
-        const caption = `🎬 *${movie.title}* (${movie.year})\n\n` +
-                       `⭐ IMDb: ${movie.rating || 'N/A'}\n` +
-                       `📁 Quality: ${bestQualityLink.quality}\n` +
-                       `📊 Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB`;
-
-        await conn.sendMessage(
-            from,
-            {
-                document: { url: bestQualityLink.url },
-                fileName: `${movie.title} (${movie.year}).mp4`,
-                mimetype: 'video/mp4',
-                caption: caption
-            },
-            { quoted: mek }
-        );
-
-        // Clean up
-        fs.unlinkSync(tempFilePath);
+        // Step 3: Download and Send
+        await sendMovieFile(Void, citel, movie, downloadLinks[0]);
 
     } catch (error) {
-        console.error('Error in movie command:', error);
-        reply(`❌ Error: ${error.message}`);
+        console.error("Movie Error:", error);
+        citel.reply(`❌ Error: ${error.response?.status === 429 ? 
+                    "API limit reached! Try later." : 
+                    "Failed to process movie."}`);
     }
 });
+
+// Helper: Get download links from external source
+async function getDownloadLinks(title, year) {
+    try {
+        // Replace this with actual download source API
+        // This is just a placeholder structure
+        return [{
+            url: `https://example-movies.com/dl/${encodeURIComponent(title)}_${year}.mp4`,
+            quality: "720p",
+            size: "850MB"
+        }];
+    } catch (err) {
+        return null;
+    }
+}
+
+// Helper: Download and send movie
+async function sendMovieFile(Void, citel, movie, downloadLink) {
+    try {
+        await citel.reply("⬇️ Downloading movie... Please wait...");
+
+        const tempFile = path.join(TEMP_DIR, `${movie.id}.mp4`);
+        
+        // Download file
+        const response = await axios({
+            url: downloadLink.url,
+            method: 'GET',
+            responseType: 'stream',
+            timeout: 60000
+        });
+
+        await pipeline(response.data, fs.createWriteStream(tempFile));
+        
+        // Check file size
+        const stats = fs.statSync(tempFile);
+        const fileSizeMB = stats.size / (1024 * 1024);
+        
+        if (fileSizeMB > 100) {
+            fs.unlinkSync(tempFile);
+            return citel.reply("⚠️ File too large for WhatsApp (max 100MB)");
+        }
+
+        // Send as document
+        await Void.sendMessage(citel.chat, {
+            document: fs.readFileSync(tempFile),
+            fileName: `${movie.title} (${movie.year}).mp4`,
+            mimetype: 'video/mp4',
+            caption: `🎬 *${movie.title}* (${movie.year})\n📁 Quality: ${downloadLink.quality}\n📊 Size: ${fileSizeMB.toFixed(2)}MB`
+        }, { quoted: citel });
+
+        // Cleanup
+        fs.unlinkSync(tempFile);
+
+    } catch (err) {
+        console.error("Download Error:", err);
+        citel.reply("❌ Failed to send movie file");
+    }
+}
