@@ -346,4 +346,3 @@ cmd({
         citel.reply("An error occurred while fetching the profile picture");
     }
 });
-          
