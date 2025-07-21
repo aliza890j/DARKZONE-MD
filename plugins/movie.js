@@ -1,78 +1,122 @@
 const axios = require('axios');
 const { cmd } = require('../command');
+const fs = require('fs');
+const { promisify } = require('util');
+const stream = require('stream');
+const pipeline = promisify(stream.pipeline);
 
 cmd({
     pattern: "movie",
-    desc: "Fetch detailed information about a movie.",
+    desc: "Search and download movies",
     category: "utility",
     react: "🎬",
     filename: __filename
 },
 async (conn, mek, m, { from, reply, sender, args }) => {
     try {
-        // Properly extract the movie name from arguments
         const movieName = args.length > 0 ? args.join(' ') : m.text.replace(/^[\.\#\$\!]?movie\s?/i, '').trim();
         
         if (!movieName) {
-            return reply("📽️ Please provide the name of the movie.\nExample: .movie Iron Man");
+            return reply("📽️ Please provide the name of the movie.\nExample: .movie The Shawshank Redemption");
         }
 
-        const apiUrl = `https://apis.davidcyriltech.my.id/imdb?query=${encodeURIComponent(movieName)}`;
-        const response = await axios.get(apiUrl);
+        // Step 1: Search for the movie
+        const searchOptions = {
+            method: 'GET',
+            url: 'https://movie-tv-music-search-and-download.p.rapidapi.com/search',
+            params: {
+                query: movieName,
+                type: 'movie'
+            },
+            headers: {
+                'x-rapidapi-host': 'movie-tv-music-search-and-download.p.rapidapi.com',
+                'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
+            }
+        };
 
-        if (!response.data.status || !response.data.movie) {
-            return reply("🚫 Movie not found. Please check the name and try again.");
+        const searchResponse = await axios.request(searchOptions);
+        const searchResults = searchResponse.data;
+
+        if (!searchResults || searchResults.length === 0) {
+            return reply("🚫 No movies found with that name. Please try another title.");
         }
 
-        const movie = response.data.movie;
+        // Get the first result
+        const movie = searchResults[0];
         
-        // Format the caption
-        const dec = `
-🎬 *${movie.title}* (${movie.year}) ${movie.rated || ''}
+        // Step 2: Get download links
+        const downloadOptions = {
+            method: 'GET',
+            url: 'https://movie-tv-music-search-and-download.p.rapidapi.com/download',
+            params: {
+                imdb: movie.imdb_id,
+                type: 'movie'
+            },
+            headers: {
+                'x-rapidapi-host': 'movie-tv-music-search-and-download.p.rapidapi.com',
+                'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
+            }
+        };
 
-⭐ *IMDb:* ${movie.imdbRating || 'N/A'} | 🍅 *Rotten Tomatoes:* ${movie.ratings.find(r => r.source === 'Rotten Tomatoes')?.value || 'N/A'} | 💰 *Box Office:* ${movie.boxoffice || 'N/A'}
+        const downloadResponse = await axios.request(downloadOptions);
+        const downloadLinks = downloadResponse.data;
 
-📅 *Released:* ${new Date(movie.released).toLocaleDateString()}
-⏳ *Runtime:* ${movie.runtime}
-🎭 *Genre:* ${movie.genres}
+        if (!downloadLinks || downloadLinks.length === 0) {
+            return reply("⚠️ No download links available for this movie.");
+        }
 
-📝 *Plot:* ${movie.plot}
+        // Find the best quality download link
+        const bestQualityLink = downloadLinks.reduce((prev, current) => 
+            (parseInt(current.quality.replace('p', '')) > parseInt(prev.quality.replace('p', ''))) ? current : prev
+        );
 
-🎥 *Director:* ${movie.director}
-✍️ *Writer:* ${movie.writer}
-🌟 *Actors:* ${movie.actors}
+        // Step 3: Download the movie
+        reply("⬇️ Downloading movie... Please wait, this may take a while...");
 
-🌍 *Country:* ${movie.country}
-🗣️ *Language:* ${movie.languages}
-🏆 *Awards:* ${movie.awards || 'None'}
+        const tempFilePath = `./temp/${movie.imdb_id}_${bestQualityLink.quality}.mp4`;
+        
+        // Download the file
+        const response = await axios({
+            method: 'GET',
+            url: bestQualityLink.url,
+            responseType: 'stream'
+        });
 
-[View on IMDb](${movie.imdbUrl})
-`;
+        await pipeline(
+            response.data,
+            fs.createWriteStream(tempFilePath)
+        );
 
-        // Send message with the requested format
+        // Step 4: Send to WhatsApp
+        const fileSize = fs.statSync(tempFilePath).size;
+        const maxSize = 100 * 1024 * 1024; // 100MB (WhatsApp limit)
+
+        if (fileSize > maxSize) {
+            fs.unlinkSync(tempFilePath);
+            return reply("⚠️ The movie file is too large to send via WhatsApp. Please try a lower quality.");
+        }
+
+        const caption = `🎬 *${movie.title}* (${movie.year})\n\n` +
+                       `⭐ IMDb: ${movie.rating || 'N/A'}\n` +
+                       `📁 Quality: ${bestQualityLink.quality}\n` +
+                       `📊 Size: ${(fileSize / (1024 * 1024)).toFixed(2)} MB`;
+
         await conn.sendMessage(
             from,
             {
-                image: { 
-                    url: movie.poster && movie.poster !== 'N/A' ? movie.poster : 'https://files.catbox.moe/7zfdcq.jpg'
-                },
-                caption: dec,
-                contextInfo: {
-                    mentionedJid: [sender],
-                    forwardingScore: 999,
-                    isForwarded: true,
-                    forwardedNewsletterMessageInfo: {
-                        newsletterJid: '120363416743041101@newsletter',
-                        newsletterName: '𝐸𝑅𝐹𝒜𝒩 𝒜𝐻𝑀𝒜𝒟',
-                        serverMessageId: 143
-                    }
-                }
+                document: { url: bestQualityLink.url },
+                fileName: `${movie.title} (${movie.year}).mp4`,
+                mimetype: 'video/mp4',
+                caption: caption
             },
             { quoted: mek }
         );
 
-    } catch (e) {
-        console.error('Movie command error:', e);
-        reply(`❌ Error: ${e.message}`);
+        // Clean up
+        fs.unlinkSync(tempFilePath);
+
+    } catch (error) {
+        console.error('Error in movie command:', error);
+        reply(`❌ Error: ${error.message}`);
     }
 });
