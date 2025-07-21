@@ -1,49 +1,78 @@
 const axios = require('axios');
-const { cmd } = require('../command');
 
 cmd({
     pattern: "movie",
-    desc: "Get full movies",
+    alias: ["dmovie", "getmovie"],
+    desc: "Search and download movies via torrent",
     category: "utility",
-    react: "🎬"
-}, async (conn, mek, m, { from, reply, args }) => {
+    use: '<movie name>',
+    filename: __filename
+}, async (conn, mek, m, { from, prefix, command, args }) => {
     try {
-        const query = args.join(' ');
-        if (!query) return reply('🎥 Please provide movie name\nExample: .movie Titanic');
+        if (!args[0]) return conn.sendMessage(from, { text: `Please provide a movie name.\nExample: *${prefix}${command} Avengers Endgame*` }, { quoted: mek });
 
-        reply('🔍 Finding full movie links...');
+        const searchQuery = args.join(' ');
         
-        // Using a more reliable API (replace with your actual API)
-        const apiUrl = `https://movies-api.example.com/search?query=${encodeURIComponent(query)}`;
-        
-        const response = await axios.get(apiUrl, {
+        // Make API request to RapidAPI
+        const options = {
+            method: 'GET',
+            url: 'https://movie-database-api1.p.rapidapi.com/list_movies.json',
+            params: {
+                query_term: searchQuery,
+                limit: 1, // Get only the most relevant result
+                sort_by: 'download_count', // Sort by most downloaded
+                order_by: 'desc'
+            },
             headers: {
-                'Authorization': 'Bearer your_api_key_here'
+                'x-rapidapi-host': 'movie-database-api1.p.rapidapi.com',
+                'x-rapidapi-key': '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100' // Your RapidAPI key
             }
-        });
+        };
 
-        if (!response.data.results.length) {
-            return reply('❌ No full movie found. Try another name or check spelling.');
+        const response = await axios.request(options);
+        const data = response.data;
+        
+        if (!data.data || !data.data.movies || data.data.movies.length === 0) {
+            return conn.sendMessage(from, { text: `No movie found for *${searchQuery}*` }, { quoted: mek });
         }
 
-        const movie = response.data.results[0];
-        
-        // Send download options
-        const message = `
-🎬 *${movie.title}* (${movie.year})
-🕒 ${movie.duration} | 🌟 ${movie.rating}/10
+        const movie = data.data.movies[0];
+        let message = `🎬 *${movie.title}* (${movie.year})\n⭐ Rating: ${movie.rating}/10\n\n`;
 
-📥 Download Options:
-1. HD Quality (${movie.hd_size})
-2. SD Quality (${movie.sd_size})
+        if (movie.torrents && movie.torrents.length > 0) {
+            message += `📥 *Download Links:*\n\n`;
+            
+            // Group torrents by quality and get the best of each
+            const qualityMap = {};
+            movie.torrents.forEach(torrent => {
+                if (!qualityMap[torrent.quality] || 
+                    (torrent.type === 'bluray' && qualityMap[torrent.quality].type !== 'bluray')) {
+                    qualityMap[torrent.quality] = torrent;
+                }
+            });
 
-Reply with *1* or *2* to download
-        `;
+            // Add download links for each quality
+            Object.entries(qualityMap).forEach(([quality, torrent]) => {
+                message += `🔹 ${quality}: ${torrent.url}\n`;
+            });
+            
+            message += `\n📌 *Note:* Copy the link and open in browser to download`;
+        } else {
+            message += `⚠️ No download links available for this movie.`;
+        }
 
+        // Send movie info with download links
         await conn.sendMessage(from, { text: message }, { quoted: mek });
 
     } catch (error) {
-        console.error('Movie error:', error);
-        reply(`❌ Error: ${error.response?.data?.message || error.message}`);
+        console.error('Error in downloadmovie command:', error);
+        let errorMessage = '❌ An error occurred while fetching movie data.';
+        if (error.response) {
+            errorMessage += `\nStatus: ${error.response.status}`;
+            if (error.response.status === 429) {
+                errorMessage += '\nAPI rate limit exceeded. Please try again later.';
+            }
+        }
+        await conn.sendMessage(from, { text: errorMessage }, { quoted: mek });
     }
 });
