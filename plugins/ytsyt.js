@@ -2,6 +2,11 @@ const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
 const axios = require('axios');
+const ytdl = require('ytdl-core'); // Add this package
+const fs = require('fs');
+const { tmpdir } = require('os');
+const { promisify } = require('util');
+const pipeline = promisify(require('stream').pipeline);
 
 cmd({
     pattern: "son",
@@ -15,45 +20,49 @@ cmd({
     try {
         if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
 
-        let videoUrl, title, thumbnail;
+        let videoUrl, title;
         
-        // URL validation and info extraction
+        // Check if it's a URL
         if (q.match(/(youtube\.com|youtu\.be)/)) {
             videoUrl = q;
-            const search = await yts({ videoId: q.split(/[=/]/).pop() });
-            title = search.title;
-            thumbnail = search.thumbnail;
+            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
+            title = videoInfo.title;
         } else {
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ No results found!");
-            videoUrl = search.videos[0].url;
-            title = search.videos[0].title;
-            thumbnail = search.videos[0].thumbnail;
+            // Search YouTube
+            const searchResults = await yts(q);
+            if (!searchResults.videos.length) return await reply("❌ No results found!");
+            
+            videoUrl = searchResults.videos[0].url;
+            title = searchResults.videos[0].title;
         }
 
-        // 1. First send thumbnail image
-        await conn.sendMessage(from, {
-            image: { url: thumbnail },
-            caption: `🎵 *${title}*`
-        }, { quoted: mek });
+        await reply("⏳ Downloading audio...");
 
-        // 2. Then send the audio
-        const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-        const response = await axios.get(apiUrl);
+        // Generate temporary file path
+        const tempFile = `${tmpdir()}/${Math.random().toString(36).substring(2, 9)}.mp3`;
         
-        if (!response.data.success) return await reply("❌ Audio download failed!");
-
+        // Download and convert to audio
+        const audioStream = ytdl(videoUrl, {
+            filter: 'audioonly',
+            quality: 'highestaudio'
+        });
+        
+        await pipeline(audioStream, fs.createWriteStream(tempFile));
+        
+        // Send audio file
         await conn.sendMessage(from, {
-            audio: { url: response.data.result.download_url },
+            audio: fs.readFileSync(tempFile),
             mimetype: 'audio/mpeg',
             ptt: false
         }, { quoted: mek });
 
-        // 3. Finally send your mod name
-        await reply(`✅ Download successful!\n\n📌 *Mod by Irfan Ahmed*`);
+        // Clean up
+        fs.unlinkSync(tempFile);
+
+        await reply(`✅ *${title}* downloaded successfully!\n\nPowered by Irfan Ahmed`);
 
     } catch (error) {
         console.error(error);
-        await reply(`❌ Error: ${error.message}\n\n📌 *Mod by Irfan Ahmed*`);
+        await reply(`❌ Error: ${error.message}\n\nPowered by Irfan Ahmed`);
     }
 });
