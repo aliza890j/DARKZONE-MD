@@ -3,7 +3,7 @@ const { cmd } = require('../command');
 const axios = require('axios');
 
 cmd({
-    pattern: "song",
+    pattern: "song5",
     alias: ["play", "music", "mp3"],
     react: "🎵",
     desc: "Download MP3 from YouTube using RapidAPI",
