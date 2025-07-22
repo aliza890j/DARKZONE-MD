@@ -3,131 +3,179 @@ const { cmd } = require('../command');
 const { ytsearch } = require('@dark-yasiya/yt-dl.js');
 const fetch = require('node-fetch');
 
-// RapidAPI configurations
+// Enhanced API configurations with timeouts
 const API_CONFIGS = {
   YT_MEDIA_DOWNLOADER: {
     url: 'https://youtube-media-downloader.p.rapidapi.com/v2/video/details',
     host: 'youtube-media-downloader.p.rapidapi.com',
-    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
+    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
+    timeout: 10000 // 10 seconds
   },
   YT_STREAM: {
     url: 'https://ytstream-download-youtube-videos.p.rapidapi.com/dl',
     host: 'ytstream-download-youtube-videos.p.rapidapi.com',
-    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
+    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
+    timeout: 10000
   },
   SOCIAL_MEDIA_DOWNLOADER: {
     url: 'https://social-media-video-downloader.p.rapidapi.com/smvd/get/youtube',
     host: 'social-media-video-downloader.p.rapidapi.com',
-    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100'
+    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
+    timeout: 10000
+  },
+  // Adding a free fallback API
+  YTDL_FALLBACK: {
+    url: 'https://yt-downloader.cyclic.cloud/download',
+    timeout: 15000
   }
 };
 
-// Helper function to try multiple APIs
+// Helper function with better error handling
+async function tryAPI(apiName, videoId, type) {
+  const config = API_CONFIGS[apiName];
+  let apiUrl;
+  let options = { timeout: config.timeout };
+
+  try {
+    switch(apiName) {
+      case 'YT_MEDIA_DOWNLOADER':
+        const params = new URLSearchParams({
+          videoId,
+          urlAccess: 'normal',
+          videos: type === 'video' ? 'auto' : 'none',
+          audios: type === 'audio' ? 'auto' : 'none'
+        });
+        apiUrl = `${config.url}?${params}`;
+        options.headers = {
+          'x-rapidapi-host': config.host,
+          'x-rapidapi-key': config.key
+        };
+        break;
+
+      case 'YT_STREAM':
+        apiUrl = `${config.url}?id=${videoId}`;
+        options.headers = {
+          'x-rapidapi-host': config.host,
+          'x-rapidapi-key': config.key
+        };
+        break;
+
+      case 'SOCIAL_MEDIA_DOWNLOADER':
+        const url = encodeURIComponent(`https://youtu.be/${videoId}`);
+        apiUrl = `${config.url}?url=${url}`;
+        options.headers = {
+          'x-rapidapi-host': config.host,
+          'x-rapidapi-key': config.key
+        };
+        break;
+
+      case 'YTDL_FALLBACK':
+        apiUrl = `${config.url}?url=https://youtu.be/${videoId}&type=${type}`;
+        break;
+    }
+
+    console.log(`Trying ${apiName} with URL: ${apiUrl}`);
+    const response = await fetch(apiUrl, options);
+    
+    if (!response.ok) {
+      throw new Error(`API ${apiName} responded with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    console.log(`${apiName} response:`, JSON.stringify(data, null, 2));
+
+    // Process response based on API
+    switch(apiName) {
+      case 'YT_MEDIA_DOWNLOADER':
+        if (type === 'video' && data.videos?.length) {
+          const bestVideo = data.videos.reduce((prev, current) => 
+            (prev.quality > current.quality) ? prev : current
+          );
+          return { url: bestVideo.url, type: 'video', api: apiName };
+        }
+        if (type === 'audio' && data.audios?.length) {
+          const bestAudio = data.audios.reduce((prev, current) => 
+            (prev.bitrate > current.bitrate) ? prev : current
+          );
+          return { url: bestAudio.url, type: 'audio', api: apiName };
+        }
+        break;
+
+      case 'YT_STREAM':
+        if (data.formats) {
+          const bestFormat = data.formats.find(f => f.qualityLabel === '720p') || 
+                            data.formats.find(f => f.qualityLabel === '480p') ||
+                            data.formats[0];
+          return { url: bestFormat.url, type: 'video', api: apiName };
+        }
+        break;
+
+      case 'SOCIAL_MEDIA_DOWNLOADER':
+        if (data.video) {
+          return { url: data.video, type: 'video', api: apiName };
+        }
+        break;
+
+      case 'YTDL_FALLBACK':
+        if (data.downloadUrl) {
+          return { url: data.downloadUrl, type, api: apiName };
+        }
+        break;
+    }
+
+    throw new Error(`No valid ${type} found in ${apiName} response`);
+  } catch (e) {
+    console.error(`Error in ${apiName}:`, e.message);
+    return null;
+  }
+}
+
+// Enhanced multiple API trial with logging
 async function tryMultipleAPIs(videoId, type = 'video') {
-  const attempts = [
-    tryYtMediaDownloader(videoId, type),
-    tryYtStream(videoId),
-    trySocialMediaDownloader(videoId)
+  const apiOrder = [
+    'YT_MEDIA_DOWNLOADER',
+    'YT_STREAM',
+    'SOCIAL_MEDIA_DOWNLOADER',
+    'YTDL_FALLBACK' // Last resort
   ];
-  
-  for (const attempt of attempts) {
-    try {
-      const result = await attempt;
-      if (result) return result;
-    } catch (e) {
-      console.log(`API attempt failed: ${e.message}`);
+
+  for (const apiName of apiOrder) {
+    console.log(`Attempting ${apiName} for ${videoId} (${type})`);
+    const result = await tryAPI(apiName, videoId, type);
+    if (result) {
+      console.log(`Success with ${apiName}: ${result.url}`);
+      return result;
     }
   }
-  throw new Error('All API attempts failed');
+
+  throw new Error(`All APIs failed for ${videoId}. Check console for details.`);
 }
 
-async function tryYtMediaDownloader(videoId, type) {
-  const params = new URLSearchParams({
-    videoId,
-    urlAccess: 'normal',
-    videos: type === 'video' ? 'auto' : 'none',
-    audios: type === 'audio' ? 'auto' : 'none'
-  });
-  
-  const response = await fetch(`${API_CONFIGS.YT_MEDIA_DOWNLOADER.url}?${params}`, {
-    headers: {
-      'x-rapidapi-host': API_CONFIGS.YT_MEDIA_DOWNLOADER.host,
-      'x-rapidapi-key': API_CONFIGS.YT_MEDIA_DOWNLOADER.key
-    }
-  });
-  
-  const data = await response.json();
-  
-  if (type === 'video' && data.videos?.length) {
-    const bestVideo = data.videos.reduce((prev, current) => 
-      (prev.quality > current.quality) ? prev : current
-    );
-    return { url: bestVideo.url, type: 'video' };
-  }
-  
-  if (type === 'audio' && data.audios?.length) {
-    const bestAudio = data.audios.reduce((prev, current) => 
-      (prev.bitrate > current.bitrate) ? prev : current
-    );
-    return { url: bestAudio.url, type: 'audio' };
-  }
-  
-  return null;
-}
-
-async function tryYtStream(videoId) {
-  const response = await fetch(`${API_CONFIGS.YT_STREAM.url}?id=${videoId}`, {
-    headers: {
-      'x-rapidapi-host': API_CONFIGS.YT_STREAM.host,
-      'x-rapidapi-key': API_CONFIGS.YT_STREAM.key
-    }
-  });
-  
-  const data = await response.json();
-  if (data.formats) {
-    const bestFormat = data.formats.find(f => f.qualityLabel === '720p') || 
-                      data.formats.find(f => f.qualityLabel === '480p') ||
-                      data.formats[0];
-    return { url: bestFormat.url, type: 'video' };
-  }
-  return null;
-}
-
-async function trySocialMediaDownloader(videoId) {
-  const url = encodeURIComponent(`https://youtu.be/${videoId}`);
-  const response = await fetch(`${API_CONFIGS.SOCIAL_MEDIA_DOWNLOADER.url}?url=${url}`, {
-    headers: {
-      'x-rapidapi-host': API_CONFIGS.SOCIAL_MEDIA_DOWNLOADER.host,
-      'x-rapidapi-key': API_CONFIGS.SOCIAL_MEDIA_DOWNLOADER.key
-    }
-  });
-  
-  const data = await response.json();
-  if (data.video) {
-    return { url: data.video, type: 'video' };
-  }
-  return null;
-}
-
-// Extract video ID from URL or search query
+// Extract video ID from URL or search query with better validation
 async function getVideoInfo(query) {
-  // If it's a URL, extract ID
-  const urlRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([^"&?\/\s]{11})/;
-  const match = query.match(urlRegex);
-  
-  if (match) {
-    const videoId = match[1];
-    const yt = await ytsearch(`https://youtu.be/${videoId}`);
+  try {
+    // If it's a URL, extract ID
+    const urlRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/([^"&?\/\s]{11})/i;
+    const match = query.match(urlRegex);
+    
+    if (match && match[1]) {
+      const videoId = match[1];
+      const yt = await ytsearch(`https://youtu.be/${videoId}`);
+      if (!yt.results.length) throw new Error("No results found for this URL");
+      return yt.results[0];
+    }
+    
+    // If it's a search query
+    const yt = await ytsearch(query);
+    if (!yt.results.length) throw new Error("No results found for your search");
     return yt.results[0];
+  } catch (e) {
+    console.error('Error in getVideoInfo:', e);
+    throw new Error("Couldn't get video information. Please try a different query.");
   }
-  
-  // If it's a search query
-  const yt = await ytsearch(query);
-  if (yt.results.length < 1) throw new Error("No results found!");
-  return yt.results[0];
 }
 
-// Video Download Command
+// Enhanced video download command with better user feedback
 cmd({ 
     pattern: "mp4", 
     alias: ["video4"], 
@@ -140,14 +188,17 @@ cmd({
     try { 
         if (!q) return await reply("Please provide a YouTube URL or video name.");
         
+        await reply("🔍 Searching for video...");
         const yts = await getVideoInfo(q);
+        
+        await reply("⬇️ Downloading video... This may take a moment...");
         const downloadInfo = await tryMultipleAPIs(yts.id, 'video');
         
         if (!downloadInfo || !downloadInfo.url) {
-            return reply("Failed to fetch the video. Please try again later.");
+            return reply("❌ Failed to download video. All APIs returned no data.");
         }
 
-        let ytmsg = `📹 *Video Downloader*
+        let ytmsg = `📹 *Video Downloader* (via ${downloadInfo.api})
 🎬 *Title:* ${yts.title}
 ⏳ *Duration:* ${yts.timestamp}
 👀 *Views:* ${yts.views}
@@ -155,6 +206,7 @@ cmd({
 🔗 *Link:* ${yts.url}
 > 𝐸𝑅𝐹𝒜𝒩 𝒜𝐻𝑀𝒜𝒟 ❤️`;
 
+        await reply("📤 Sending video...");
         await conn.sendMessage(
             from, 
             { 
@@ -166,12 +218,12 @@ cmd({
         );
 
     } catch (e) {
-        console.log(e);
-        reply("An error occurred: " + e.message);
+        console.error('Video download error:', e);
+        reply(`❌ Error: ${e.message}\n\nPlease try again later or with a different video.`);
     }
 });
 
-// Audio Download Command
+// Enhanced audio download command with better user feedback
 cmd({ 
     pattern: "song4", 
     alias: ["play", "mp3"], 
@@ -184,13 +236,17 @@ cmd({
     try {
         if (!q) return reply("Please provide a song name or YouTube link.");
 
+        await reply("🔍 Searching for song...");
         const song = await getVideoInfo(q);
+        
+        await reply("⬇️ Downloading audio... This may take a moment...");
         const downloadInfo = await tryMultipleAPIs(song.id, 'audio');
         
         if (!downloadInfo || !downloadInfo.url) {
-            return reply("Failed to fetch the audio. Please try again later.");
+            return reply("❌ Failed to download audio. All APIs returned no data.");
         }
 
+        await reply("📤 Sending audio...");
         await conn.sendMessage(from, {
             audio: { url: downloadInfo.url },
             mimetype: "audio/mpeg",
@@ -210,7 +266,7 @@ cmd({
         }, { quoted: mek });
 
     } catch (error) {
-        console.error(error);
-        reply("An error occurred: " + error.message);
+        console.error('Audio download error:', error);
+        reply(`❌ Error: ${error.message}\n\nPlease try again later or with a different song.`);
     }
 });
