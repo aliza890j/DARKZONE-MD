@@ -2,271 +2,295 @@ const config = require('../config');
 const { cmd } = require('../command');
 const { ytsearch } = require('@dark-yasiya/yt-dl.js');
 const fetch = require('node-fetch');
+const axios = require('axios');
 
-// Enhanced API configurations with timeouts
+// API configurations with fallback options
 const API_CONFIGS = {
-  YT_MEDIA_DOWNLOADER: {
+  PRIMARY: {
+    name: "YouTube Media Downloader",
     url: 'https://youtube-media-downloader.p.rapidapi.com/v2/video/details',
     host: 'youtube-media-downloader.p.rapidapi.com',
     key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
-    timeout: 10000 // 10 seconds
+    timeout: 8000
   },
-  YT_STREAM: {
+  SECONDARY: {
+    name: "YT Stream",
     url: 'https://ytstream-download-youtube-videos.p.rapidapi.com/dl',
     host: 'ytstream-download-youtube-videos.p.rapidapi.com',
     key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
-    timeout: 10000
+    timeout: 8000
   },
-  SOCIAL_MEDIA_DOWNLOADER: {
-    url: 'https://social-media-video-downloader.p.rapidapi.com/smvd/get/youtube',
-    host: 'social-media-video-downloader.p.rapidapi.com',
-    key: '8f8214432dmshe2d6730ba6b5541p119a35jsna12406472100',
-    timeout: 10000
-  },
-  // Adding a free fallback API
-  YTDL_FALLBACK: {
-    url: 'https://yt-downloader.cyclic.cloud/download',
+  FALLBACK: {
+    name: "Free YouTube Downloader",
+    url: 'https://yt-api-henna.vercel.app/download',
     timeout: 15000
   }
 };
 
-// Helper function with better error handling
-async function tryAPI(apiName, videoId, type) {
-  const config = API_CONFIGS[apiName];
-  let apiUrl;
-  let options = { timeout: config.timeout };
+// Improved API try function
+async function tryDownloadAPI(videoId, type) {
+  const attempts = [
+    attemptPrimaryAPI(videoId, type),
+    attemptSecondaryAPI(videoId, type),
+    attemptFallbackAPI(videoId, type)
+  ];
 
+  for (const attempt of attempts) {
+    try {
+      const result = await attempt;
+      if (result && result.url) {
+        return result;
+      }
+    } catch (e) {
+      console.error('API attempt failed:', e.message);
+    }
+  }
+  throw new Error("All download attempts failed");
+}
+
+async function attemptPrimaryAPI(videoId, type) {
   try {
-    switch(apiName) {
-      case 'YT_MEDIA_DOWNLOADER':
-        const params = new URLSearchParams({
-          videoId,
-          urlAccess: 'normal',
-          videos: type === 'video' ? 'auto' : 'none',
-          audios: type === 'audio' ? 'auto' : 'none'
-        });
-        apiUrl = `${config.url}?${params}`;
-        options.headers = {
-          'x-rapidapi-host': config.host,
-          'x-rapidapi-key': config.key
-        };
-        break;
+    const options = {
+      method: 'GET',
+      url: API_CONFIGS.PRIMARY.url,
+      params: {
+        videoId: videoId,
+        urlAccess: 'normal',
+        videos: type === 'video' ? 'auto' : 'none',
+        audios: type === 'audio' ? 'auto' : 'none'
+      },
+      headers: {
+        'x-rapidapi-host': API_CONFIGS.PRIMARY.host,
+        'x-rapidapi-key': API_CONFIGS.PRIMARY.key
+      },
+      timeout: API_CONFIGS.PRIMARY.timeout
+    };
 
-      case 'YT_STREAM':
-        apiUrl = `${config.url}?id=${videoId}`;
-        options.headers = {
-          'x-rapidapi-host': config.host,
-          'x-rapidapi-key': config.key
-        };
-        break;
+    const response = await axios.request(options);
+    const data = response.data;
 
-      case 'SOCIAL_MEDIA_DOWNLOADER':
-        const url = encodeURIComponent(`https://youtu.be/${videoId}`);
-        apiUrl = `${config.url}?url=${url}`;
-        options.headers = {
-          'x-rapidapi-host': config.host,
-          'x-rapidapi-key': config.key
-        };
-        break;
-
-      case 'YTDL_FALLBACK':
-        apiUrl = `${config.url}?url=https://youtu.be/${videoId}&type=${type}`;
-        break;
+    if (type === 'video' && data.videos?.length) {
+      const bestVideo = data.videos.sort((a, b) => b.quality - a.quality)[0];
+      return { 
+        url: bestVideo.url, 
+        api: API_CONFIGS.PRIMARY.name,
+        quality: bestVideo.qualityLabel || 'HD'
+      };
     }
 
-    console.log(`Trying ${apiName} with URL: ${apiUrl}`);
-    const response = await fetch(apiUrl, options);
-    
-    if (!response.ok) {
-      throw new Error(`API ${apiName} responded with status ${response.status}`);
+    if (type === 'audio' && data.audios?.length) {
+      const bestAudio = data.audios.sort((a, b) => b.bitrate - a.bitrate)[0];
+      return { 
+        url: bestAudio.url, 
+        api: API_CONFIGS.PRIMARY.name,
+        quality: 'Audio'
+      };
     }
-
-    const data = await response.json();
-    console.log(`${apiName} response:`, JSON.stringify(data, null, 2));
-
-    // Process response based on API
-    switch(apiName) {
-      case 'YT_MEDIA_DOWNLOADER':
-        if (type === 'video' && data.videos?.length) {
-          const bestVideo = data.videos.reduce((prev, current) => 
-            (prev.quality > current.quality) ? prev : current
-          );
-          return { url: bestVideo.url, type: 'video', api: apiName };
-        }
-        if (type === 'audio' && data.audios?.length) {
-          const bestAudio = data.audios.reduce((prev, current) => 
-            (prev.bitrate > current.bitrate) ? prev : current
-          );
-          return { url: bestAudio.url, type: 'audio', api: apiName };
-        }
-        break;
-
-      case 'YT_STREAM':
-        if (data.formats) {
-          const bestFormat = data.formats.find(f => f.qualityLabel === '720p') || 
-                            data.formats.find(f => f.qualityLabel === '480p') ||
-                            data.formats[0];
-          return { url: bestFormat.url, type: 'video', api: apiName };
-        }
-        break;
-
-      case 'SOCIAL_MEDIA_DOWNLOADER':
-        if (data.video) {
-          return { url: data.video, type: 'video', api: apiName };
-        }
-        break;
-
-      case 'YTDL_FALLBACK':
-        if (data.downloadUrl) {
-          return { url: data.downloadUrl, type, api: apiName };
-        }
-        break;
-    }
-
-    throw new Error(`No valid ${type} found in ${apiName} response`);
   } catch (e) {
-    console.error(`Error in ${apiName}:`, e.message);
+    console.error('Primary API error:', e.message);
     return null;
   }
 }
 
-// Enhanced multiple API trial with logging
-async function tryMultipleAPIs(videoId, type = 'video') {
-  const apiOrder = [
-    'YT_MEDIA_DOWNLOADER',
-    'YT_STREAM',
-    'SOCIAL_MEDIA_DOWNLOADER',
-    'YTDL_FALLBACK' // Last resort
-  ];
+async function attemptSecondaryAPI(videoId, type) {
+  try {
+    const options = {
+      method: 'GET',
+      url: API_CONFIGS.SECONDARY.url,
+      params: { id: videoId },
+      headers: {
+        'x-rapidapi-host': API_CONFIGS.SECONDARY.host,
+        'x-rapidapi-key': API_CONFIGS.SECONDARY.key
+      },
+      timeout: API_CONFIGS.SECONDARY.timeout
+    };
 
-  for (const apiName of apiOrder) {
-    console.log(`Attempting ${apiName} for ${videoId} (${type})`);
-    const result = await tryAPI(apiName, videoId, type);
-    if (result) {
-      console.log(`Success with ${apiName}: ${result.url}`);
-      return result;
+    const response = await axios.request(options);
+    const data = response.data;
+
+    if (data.formats) {
+      const bestFormat = type === 'video' 
+        ? data.formats.find(f => f.qualityLabel === '720p') || 
+          data.formats.find(f => f.qualityLabel === '480p') ||
+          data.formats[0]
+        : data.formats.find(f => f.hasAudio && !f.hasVideo);
+      
+      if (bestFormat) {
+        return {
+          url: bestFormat.url,
+          api: API_CONFIGS.SECONDARY.name,
+          quality: bestFormat.qualityLabel || 'Standard'
+        };
+      }
     }
+  } catch (e) {
+    console.error('Secondary API error:', e.message);
+    return null;
   }
-
-  throw new Error(`All APIs failed for ${videoId}. Check console for details.`);
 }
 
-// Extract video ID from URL or search query with better validation
-async function getVideoInfo(query) {
+async function attemptFallbackAPI(videoId, type) {
   try {
-    // If it's a URL, extract ID
+    const response = await axios.get(`${API_CONFIGS.FALLBACK.url}?id=${videoId}&type=${type}`, {
+      timeout: API_CONFIGS.FALLBACK.timeout
+    });
+    
+    if (response.data?.url) {
+      return {
+        url: response.data.url,
+        api: API_CONFIGS.FALLBACK.name,
+        quality: type === 'video' ? 'HD' : 'Audio'
+      };
+    }
+  } catch (e) {
+    console.error('Fallback API error:', e.message);
+    return null;
+  }
+}
+
+// Improved video info extraction
+async function getVideoDetails(query) {
+  try {
+    // Extract video ID if URL is provided
     const urlRegex = /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/([^"&?\/\s]{11})/i;
     const match = query.match(urlRegex);
     
+    let videoInfo;
     if (match && match[1]) {
+      // If it's a URL
       const videoId = match[1];
-      const yt = await ytsearch(`https://youtu.be/${videoId}`);
-      if (!yt.results.length) throw new Error("No results found for this URL");
-      return yt.results[0];
+      const search = await ytsearch(`https://youtu.be/${videoId}`);
+      videoInfo = search.results[0];
+    } else {
+      // If it's a search query
+      const search = await ytsearch(query);
+      videoInfo = search.results[0];
     }
-    
-    // If it's a search query
-    const yt = await ytsearch(query);
-    if (!yt.results.length) throw new Error("No results found for your search");
-    return yt.results[0];
+
+    if (!videoInfo) {
+      throw new Error("No video found for your query");
+    }
+
+    return {
+      id: videoInfo.id || extractIdFromUrl(videoInfo.url),
+      title: videoInfo.title,
+      duration: videoInfo.timestamp,
+      views: videoInfo.views,
+      author: videoInfo.author?.name || "Unknown",
+      url: videoInfo.url,
+      thumbnail: videoInfo.thumbnail?.replace('default.jpg', 'hqdefault.jpg')
+    };
   } catch (e) {
-    console.error('Error in getVideoInfo:', e);
+    console.error('Video details error:', e);
     throw new Error("Couldn't get video information. Please try a different query.");
   }
 }
 
-// Enhanced video download command with better user feedback
+function extractIdFromUrl(url) {
+  const regExp = /^.*(youtu.be\/|v\/|u\/\w\/|embed\/|watch\?v=|&v=)([^#&?]*).*/;
+  const match = url.match(regExp);
+  return (match && match[2].length === 11) ? match[2] : null;
+}
+
+// Video Download Command
 cmd({ 
     pattern: "mp4", 
-    alias: ["video4"], 
+    alias: ["video", "vid"], 
     react: "🎥", 
     desc: "Download YouTube video", 
     category: "main", 
-    use: '.mp4 < Yt url or Name >', 
+    use: '.mp4 <YouTube URL or search term>', 
     filename: __filename 
-}, async (conn, mek, m, { from, prefix, quoted, q, reply }) => { 
-    try { 
-        if (!q) return await reply("Please provide a YouTube URL or video name.");
+}, async (conn, mek, m, { from, reply, q }) => {
+    try {
+        if (!q) return reply("Please provide a YouTube URL or video name.");
+
+        // Step 1: Get video info
+        await reply("🔍 Searching for video details...");
+        const video = await getVideoDetails(q);
         
-        await reply("🔍 Searching for video...");
-        const yts = await getVideoInfo(q);
+        // Step 2: Download video
+        await reply("⬇️ Downloading video (this may take a moment)...");
+        const download = await tryDownloadAPI(video.id, 'video');
         
-        await reply("⬇️ Downloading video... This may take a moment...");
-        const downloadInfo = await tryMultipleAPIs(yts.id, 'video');
-        
-        if (!downloadInfo || !downloadInfo.url) {
-            return reply("❌ Failed to download video. All APIs returned no data.");
+        if (!download) {
+            return reply("❌ Failed to download video. Please try again later.");
         }
 
-        let ytmsg = `📹 *Video Downloader* (via ${downloadInfo.api})
-🎬 *Title:* ${yts.title}
-⏳ *Duration:* ${yts.timestamp}
-👀 *Views:* ${yts.views}
-👤 *Author:* ${yts.author.name}
-🔗 *Link:* ${yts.url}
-> 𝐸𝑅𝐹𝒜𝒩 𝒜𝐻𝑀𝒜𝒟 ❤️`;
+        // Step 3: Prepare message
+        const caption = `📹 *${video.title}* (${download.quality})
+⏳ Duration: ${video.duration}
+👀 Views: ${video.views}
+👤 Author: ${video.author}
+🔗 URL: ${video.url}
+📥 Downloaded via ${download.api}`;
 
+        // Step 4: Send video
         await reply("📤 Sending video...");
-        await conn.sendMessage(
-            from, 
-            { 
-                video: { url: downloadInfo.url }, 
-                caption: ytmsg,
-                mimetype: "video/mp4"
-            }, 
-            { quoted: mek }
-        );
+        await conn.sendMessage(from, {
+            video: { url: download.url },
+            caption: caption,
+            mimetype: "video/mp4"
+        }, { quoted: mek });
 
-    } catch (e) {
-        console.error('Video download error:', e);
-        reply(`❌ Error: ${e.message}\n\nPlease try again later or with a different video.`);
+    } catch (error) {
+        console.error('Video command error:', error);
+        reply(`❌ Error: ${error.message}\nPlease try again with a different video.`);
     }
 });
 
-// Enhanced audio download command with better user feedback
+// Audio Download Command
 cmd({ 
     pattern: "song4", 
-    alias: ["play", "mp3"], 
-    react: "🎶", 
-    desc: "Download YouTube song", 
+    alias: ["music", "mp3"], 
+    react: "🎵", 
+    desc: "Download YouTube audio", 
     category: "main", 
-    use: '.song <query>', 
+    use: '.song <YouTube URL or search term>', 
     filename: __filename 
-}, async (conn, mek, m, { from, sender, reply, q }) => { 
+}, async (conn, mek, m, { from, reply, q }) => {
     try {
         if (!q) return reply("Please provide a song name or YouTube link.");
 
-        await reply("🔍 Searching for song...");
-        const song = await getVideoInfo(q);
+        // Step 1: Get video info
+        await reply("🔍 Searching for song details...");
+        const video = await getVideoDetails(q);
         
-        await reply("⬇️ Downloading audio... This may take a moment...");
-        const downloadInfo = await tryMultipleAPIs(song.id, 'audio');
+        // Step 2: Download audio
+        await reply("⬇️ Downloading audio (this may take a moment)...");
+        const download = await tryDownloadAPI(video.id, 'audio');
         
-        if (!downloadInfo || !downloadInfo.url) {
-            return reply("❌ Failed to download audio. All APIs returned no data.");
+        if (!download) {
+            return reply("❌ Failed to download audio. Please try again later.");
         }
 
+        // Step 3: Prepare message
+        const caption = `🎵 *${video.title}*
+⏳ Duration: ${video.duration}
+👤 Artist: ${video.author}
+🔗 URL: ${video.url}
+📥 Downloaded via ${download.api}`;
+
+        // Step 4: Send audio
         await reply("📤 Sending audio...");
         await conn.sendMessage(from, {
-            audio: { url: downloadInfo.url },
+            audio: { url: download.url },
             mimetype: "audio/mpeg",
-            fileName: `${song.title}.mp3`,
+            fileName: `${video.title}.mp3`,
             contextInfo: {
                 externalAdReply: {
-                    title: song.title.length > 25 ? `${song.title.substring(0, 22)}...` : song.title,
-                    body: "Join our WhatsApp Channel",
+                    title: video.title.length > 30 ? `${video.title.substring(0, 27)}...` : video.title,
+                    body: "Enjoy the music!",
                     mediaType: 1,
-                    thumbnailUrl: song.thumbnail.replace('default.jpg', 'hqdefault.jpg'),
-                    sourceUrl: 'https://whatsapp.com/channel/0029Vb5dDVO59PwTnL86j13J',
-                    mediaUrl: 'https://whatsapp.com/channel/0029Vb5dDVO59PwTnL86j13J',
-                    showAdAttribution: true,
-                    renderLargerThumbnail: true
+                    thumbnailUrl: video.thumbnail,
+                    sourceUrl: video.url,
+                    showAdAttribution: true
                 }
             }
         }, { quoted: mek });
 
     } catch (error) {
-        console.error('Audio download error:', error);
-        reply(`❌ Error: ${error.message}\n\nPlease try again later or with a different song.`);
+        console.error('Song command error:', error);
+        reply(`❌ Error: ${error.message}\nPlease try again with a different song.`);
     }
 });
