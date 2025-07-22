@@ -1,16 +1,10 @@
 const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
-const axios = require('axios');
-const ytdl = require('ytdl-core'); // Add this package
-const fs = require('fs');
-const { tmpdir } = require('os');
-const { promisify } = require('util');
-const pipeline = promisify(require('stream').pipeline);
 
 cmd({
-    pattern: "son",
-    alias: ["play", "music"],
+    pattern: "yt22",
+    alias: ["play2", "music"],
     react: "🎵",
     desc: "Download audio from YouTube",
     category: "download",
@@ -29,40 +23,32 @@ cmd({
             title = videoInfo.title;
         } else {
             // Search YouTube
-            const searchResults = await yts(q);
-            if (!searchResults.videos.length) return await reply("❌ No results found!");
-            
-            videoUrl = searchResults.videos[0].url;
-            title = searchResults.videos[0].title;
+            const search = await yts(q);
+            if (!search.videos.length) return await reply("❌ No results found!");
+            videoUrl = search.videos[0].url;
+            title = search.videos[0].title;
         }
 
         await reply("⏳ Downloading audio...");
 
-        // Generate temporary file path
-        const tempFile = `${tmpdir()}/${Math.random().toString(36).substring(2, 9)}.mp3`;
-        
-        // Download and convert to audio
-        const audioStream = ytdl(videoUrl, {
-            filter: 'audioonly',
-            quality: 'highestaudio'
-        });
-        
-        await pipeline(audioStream, fs.createWriteStream(tempFile));
-        
-        // Send audio file
+        // Use API to get audio
+        const apiUrl = `AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A/ytmp3?url=${encodeURIComponent(videoUrl)}`;
+        const response = await fetch(apiUrl);
+        const data = await response.json();
+
+        if (!data.success) return await reply("❌ Failed to download audio!");
+
         await conn.sendMessage(from, {
-            audio: fs.readFileSync(tempFile),
+            audio: { url: data.result.download_url },
             mimetype: 'audio/mpeg',
             ptt: false
         }, { quoted: mek });
 
-        // Clean up
-        fs.unlinkSync(tempFile);
-
-        await reply(`✅ *${title}* downloaded successfully!\n\nPowered by Irfan Ahmed`);
+        await reply(`✅ *${title}* downloaded successfully!`);
 
     } catch (error) {
         console.error(error);
-        await reply(`❌ Error: ${error.message}\n\nPowered by Irfan Ahmed`);
+        await reply(`❌ Error: ${error.message}`);
     }
 });
+
