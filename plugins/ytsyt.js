@@ -1,68 +1,41 @@
-const config = require('../config');
-const { cmd } = require('../command');
-const yts = require('yt-search');
+const fetch = require('node-fetch');
+const { ytmp3 } = require('../lib/y2mate');
 
-cmd({
-    pattern: "yt22",
-    alias: ["play2", "music"],
-    react: "🎵",
-    desc: "Download audio from YouTube",
-    category: "download",
-    use: ".song <query or url>",
-    filename: __filename
-}, async (conn, m, mek, { from, q, reply }) => {
+module.exports = {
+  name: 'song4',
+  alias: ['downloadmusic', 'music', 'ytmp3', 'song'],
+  category: 'media',
+  desc: 'Download music from YouTube by title',
+  async exec(m, { text, args, command }) {
+    if (!text) return m.reply('Please provide a song name. Example: .song Despacito');
+
     try {
-        if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
+      m.reply('🔎 Searching for the song...');
 
-        let videoUrl, title, thumbnail;
-        
-        // Check if it's a URL
-        if (q.match(/(youtube\.com|youtu\.be)/)) {
-            videoUrl = q;
-            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
-            title = videoInfo.title;
-            thumbnail = videoInfo.thumbnail;
-        } else {
-            // Search YouTube using official API with your key
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ No results found!");
-            videoUrl = search.videos[0].url;
-            title = search.videos[0].title;
-            thumbnail = search.videos[0].thumbnail;
-        }
+      const apiKey = process.env.YT_API_KEY || 'YOUR_API_KEY_HERE'; // Replace or use env
+      const query = encodeURIComponent(text);
+      const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${apiKey}&type=video&maxResults=1`;
 
-        await reply("⏳ Downloading audio...");
+      const res = await fetch(url);
+      const data = await res.json();
+      if (!data.items || !data.items.length) return m.reply('❌ No results found.');
 
-        // Use YouTube official API with your API key
-        const apiUrl = `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoUrl.split(/[=/]/).pop()}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A`;
-        const response = await fetch(apiUrl);
-        const data = await response.json();
+      const videoId = data.items[0].id.videoId;
+      const title = data.items[0].snippet.title;
+      const ytLink = `https://www.youtube.com/watch?v=${videoId}`;
 
-        if (!data.items || !data.items.length) return await reply("❌ Failed to fetch audio details!");
+      // Now get MP3 using a custom y2mate scraper or API
+      const result = await ytmp3(ytLink); // This should return { dl_link, title, filesize }
 
-        // Beautiful audio player design
-        const audioMessage = {
-            audio: { url: `https://yt-downloader.herokuapp.com/download?url=${encodeURIComponent(videoUrl)}` },
-            mimetype: 'audio/mpeg',
-            ptt: false,
-            contextInfo: {
-                externalAdReply: {
-                    title: title,
-                    body: "🎧 YouTube Audio Player",
-                    thumbnail: thumbnail,
-                    mediaType: 2,
-                    mediaUrl: videoUrl,
-                    sourceUrl: videoUrl
-                }
-            }
-        };
+      let msg = `🎵 *Title:* ${result.title}\n📦 *Size:* ${result.filesize}\n🔗 *Link:* ${result.dl_link}`;
+      await m.reply(msg);
 
-        await conn.sendMessage(from, audioMessage, { quoted: mek });
+      await m.reply('⏬ Sending audio...');
+      await m.sendFile(result.dl_link, `${result.title}.mp3`, null, m);
 
-        await reply(`✅ *${title}* downloaded successfully!\n🎵 Now playing in beautiful audio player`);
-
-    } catch (error) {
-        console.error(error);
-        await reply(`❌ Error: ${error.message}`);
+    } catch (err) {
+      console.error(err);
+      m.reply('⚠️ Error fetching song. Try again later.');
     }
-});
+  }
+};
