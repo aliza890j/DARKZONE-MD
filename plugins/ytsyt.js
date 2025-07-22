@@ -13,7 +13,7 @@ function extractVideoId(url) {
 }
 
 cmd({
-    pattern: "song",
+    pattern: "son",
     alias: ["music", "ytmusic"],
     react: "🎵",
     desc: "Download YouTube songs",
