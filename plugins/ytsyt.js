@@ -1,5 +1,7 @@
-const fetch = require('node-fetch');
-const { ytmp3 } = require('../lib/y2mate');
+const config = require('../config');
+const { cmd } = require('../command');
+const yts = require('yt-search');
+
 
 module.exports = {
   name: 'song4',
