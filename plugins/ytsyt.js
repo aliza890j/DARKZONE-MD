@@ -2,6 +2,7 @@ const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
 const axios = require('axios');
+const ytdl = require('ytdl-core');
 
 cmd({
     pattern: "son",
@@ -15,37 +16,39 @@ cmd({
     try {
         if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
 
-        let videoUrl, title;
+        let videoUrl, title, thumbnail;
         
         // Check if it's a URL
-        if (q.match(/(youtube\.com|youtu\.be)/)) {
+        if (ytdl.validateURL(q)) {
             videoUrl = q;
-            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
-            title = videoInfo.title;
+            const info = await ytdl.getInfo(q);
+            title = info.videoDetails.title;
+            thumbnail = info.videoDetails.thumbnails[0].url;
         } else {
-            // Search YouTube using API
-            const searchResponse = await axios.get(
-                `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=${encodeURIComponent(q)}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A&type=video`
-            );
-            
-            if (!searchResponse.data.items.length) return await reply("❌ No results found!");
-            
-            videoUrl = `https://youtu.be/${searchResponse.data.items[0].id.videoId}`;
-            title = searchResponse.data.items[0].snippet.title;
+            // Search YouTube
+            const search = await yts(q);
+            if (!search.videos.length) return await reply("❌ No results found!");
+            videoUrl = search.videos[0].url;
+            title = search.videos[0].title;
+            thumbnail = search.videos[0].thumbnail;
         }
 
         await reply("⏳ Downloading audio...");
 
-        // Use YouTube API to get audio
-        const downloadResponse = await axios.get(
-            `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoUrl.split(/[=/]/).pop()}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A`
-        );
-
-        if (!downloadResponse.data.items) return await reply("❌ Failed to download audio!");
-
-        // Send audio file
+        // Send thumbnail first
         await conn.sendMessage(from, {
-            audio: { url: videoUrl },
+            image: { url: thumbnail },
+            caption: `🎧 *${title}*`
+        }, { quoted: mek });
+
+        // Download audio stream directly
+        const audioStream = ytdl(videoUrl, {
+            filter: 'audioonly',
+            quality: 'highestaudio'
+        });
+
+        await conn.sendMessage(from, {
+            audio: { stream: audioStream },
             mimetype: 'audio/mpeg',
             ptt: false
         }, { quoted: mek });
@@ -54,6 +57,6 @@ cmd({
 
     } catch (error) {
         console.error(error);
-        await reply(`❌ Error: ${error.message}\n\nPowered by Irfan Ahmed`);
+        await reply(`❌ Error: ${error.message}\n\n⚠️ If you got "can't load audio" error, please try again later or use another song.\n\nPowered by Irfan Ahmed`);
     }
 });
