@@ -1,119 +1,74 @@
 const config = require('../config');
 const { cmd } = require('../command');
-const yts = require('yt-search');
 const axios = require('axios');
 
 cmd({
-    pattern: "music5",
-    alias: ["play5", "song5", "7digital"],
+    pattern: "song",
+    alias: ["play", "music", "mp3"],
     react: "🎵",
-    desc: "Search and stream music from 7digital API",
+    desc: "Download MP3 from YouTube using RapidAPI",
     category: "download",
-    use: ".music <query>",
+    use: ".song <YouTube URL or Song Name>",
     filename: __filename
 }, async (conn, m, mek, { from, q, reply }) => {
     try {
-        if (!q) return await reply("❌ *Please provide a song name!*\nExample: .music Shape of You");
+        if (!q) return await reply("❌ *Please provide a YouTube URL or song name!*");
 
-        await reply("🔍 *Searching for your music...*");
+        let videoUrl, title;
 
-        // 7digital API configuration
-        const apiConfig = {
-            baseURL: 'https://api.7digital.com/1.2/',
-            headers: {
-                'accept': 'application/json',
-                'Authorization': `Bearer ${config.SEVENDIGITAL_API_KEY}` // Add your API key to config
-            },
+        // If it's a search query, find the first YouTube result
+        if (!q.includes("youtube.com") && !q.includes("youtu.be")) {
+            const search = await axios.get(`https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(q)}&key=${config.YOUTUBE_API_KEY}&maxResults=1`);
+            if (!search.data.items.length) return await reply("❌ *No results found!*");
+            videoUrl = `https://youtube.com/watch?v=${search.data.items[0].id.videoId}`;
+            title = search.data.items[0].snippet.title;
+        } else {
+            videoUrl = q;
+            // Extract video ID for title
+            const videoId = q.match(/(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|youtu\.be\/)([^"&?\/\s]{11})/i)[1];
+            const videoInfo = await axios.get(`https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${videoId}&key=${config.YOUTUBE_API_KEY}`);
+            title = videoInfo.data.items[0].snippet.title;
+        }
+
+        await reply("⏳ *Downloading MP3... Please wait!*");
+
+        // RapidAPI YouTube to MP3 Conversion
+        const options = {
+            method: 'GET',
+            url: 'https://youtube-to-mp4.p.rapidapi.com/url=&title',
             params: {
-                q: q,
-                country: 'US',
-                pageSize: 5,
-                usageTypes: 'download,streaming'
+                url: videoUrl,
+                title: title
+            },
+            headers: {
+                'x-rapidapi-host': 'youtube-to-mp4.p.rapidapi.com',
+                'x-rapidapi-key': config.RAPIDAPI_KEY // Add your key in config.js
             }
         };
 
-        // Search 7digital catalog
-        const searchResponse = await axios.get('track/search', apiConfig);
-        const tracks = searchResponse.data?.searchResults?.searchResult;
+        const response = await axios.request(options);
         
-        if (!tracks || tracks.length === 0) {
-            return await reply("❌ *No results found on 7digital!* Trying YouTube instead...");
-            
-            // Fallback to YouTube if 7digital fails
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
-            
-            const videoUrl = search.videos[0].url;
-            const title = search.videos[0].title;
-            
-            await reply("⏳ *Downloading audio from YouTube...*");
-            
-            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-            const ytResponse = await axios.get(ytApiUrl);
-            
-            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
-            
-            await conn.sendMessage(from, {
-                audio: { url: ytResponse.data.result.download_url },
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-            
-            return await reply(`✅ *${title}* downloaded from YouTube!`);
+        if (!response.data || !response.data.downloadUrl) {
+            return await reply("❌ *Failed to download MP3!*");
         }
 
-        // Get the first track
-        const track = tracks[0];
-        const streamUrl = track.releases[0]?.track?.streamingUrl;
-        
-        if (!streamUrl) {
-            return await reply("❌ *Streaming not available for this track*");
-        }
-
-        await reply(`🎧 *Now playing:* ${track.title} - ${track.artist.name}`);
-
-        // Send the audio stream
         await conn.sendMessage(from, {
-            audio: { url: streamUrl },
+            audio: { url: response.data.downloadUrl },
             mimetype: 'audio/mpeg',
             ptt: false,
             contextInfo: {
                 externalAdReply: {
-                    title: track.title,
-                    body: `by ${track.artist.name} | via 7digital`,
-                    thumbnail: await (await axios.get(track.image, { responseType: 'arraybuffer' })).data
+                    title: title,
+                    body: "Downloaded via RapidAPI",
+                    thumbnail: (await axios.get(`https://img.youtube.com/vi/${videoUrl.split('v=')[1].split('&')[0]}/0.jpg`, { responseType: 'arraybuffer' })).data
                 }
             }
         }, { quoted: mek });
 
+        await reply(`✅ *Downloaded Successfully!*\n🎧 *Title:* ${title}`);
+
     } catch (error) {
-        console.error('Music API Error:', error);
-        await reply(`❌ *Error!* ${error.response?.data?.message || error.message}\nTrying YouTube fallback...`);
-        
-        // YouTube fallback
-        try {
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
-            
-            const videoUrl = search.videos[0].url;
-            const title = search.videos[0].title;
-            
-            await reply("⏳ *Downloading audio from YouTube...*");
-            
-            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-            const ytResponse = await axios.get(ytApiUrl);
-            
-            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
-            
-            await conn.sendMessage(from, {
-                audio: { url: ytResponse.data.result.download_url },
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-            
-            await reply(`✅ *${title}* downloaded from YouTube!`);
-        } catch (ytError) {
-            await reply("❌ *Failed to get music from all sources!* Please try again later.");
-        }
+        console.error("Song Download Error:", error);
+        await reply(`❌ *Error!* ${error.message || "Failed to process request."}`);
     }
 });
