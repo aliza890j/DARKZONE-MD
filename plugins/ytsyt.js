@@ -12,7 +12,7 @@ module.exports = {
     try {
       m.reply('🔎 Searching for the song...');
 
-      const apiKey = process.env.YT_API_KEY || 'YOUR_API_KEY_HERE'; // Replace or use env
+      const apiKey = process.env.YT_API_KEY || 'AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A'; // Replace or use env
       const query = encodeURIComponent(text);
       const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${query}&key=${apiKey}&type=video&maxResults=1`;
 
