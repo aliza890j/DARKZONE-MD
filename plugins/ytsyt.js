@@ -1,6 +1,6 @@
 // YouTube video download using RapidAPI (with enhanced error handling)
 cmd({ 
-    pattern: "yt", 
+    pattern: "yt4", 
     alias: ["youtube", "video"], 
     react: "🎥", 
     desc: "Download YouTube video", 
