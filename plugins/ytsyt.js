@@ -4,116 +4,56 @@ const yts = require('yt-search');
 const axios = require('axios');
 
 cmd({
-    pattern: "musi",
-    alias: ["play", "song", "7digital"],
+    pattern: "son",
+    alias: ["play", "music"],
     react: "🎵",
-    desc: "Search and stream music from 7digital API",
+    desc: "Download audio from YouTube",
     category: "download",
-    use: ".music <query>",
+    use: ".song <query or url>",
     filename: __filename
 }, async (conn, m, mek, { from, q, reply }) => {
     try {
-        if (!q) return await reply("❌ *Please provide a song name!*\nExample: .music Shape of You");
+        if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
 
-        await reply("🔍 *Searching for your music...*");
-
-        // 7digital API configuration
-        const apiConfig = {
-            baseURL: 'https://api.7digital.com/1.2/',
-            headers: {
-                'accept': 'application/json',
-                'Authorization': `Bearer ${config.SEVENDIGITAL_API_KEY}` // Add your API key to config
-            },
-            params: {
-                q: q,
-                country: 'US',
-                pageSize: 5,
-                usageTypes: 'download,streaming'
-            }
-        };
-
-        // Search 7digital catalog
-        const searchResponse = await axios.get('track/search', apiConfig);
-        const tracks = searchResponse.data?.searchResults?.searchResult;
+        let videoUrl, title;
         
-        if (!tracks || tracks.length === 0) {
-            return await reply("❌ *No results found on 7digital!* Trying YouTube instead...");
+        // Check if it's a URL
+        if (q.match(/(youtube\.com|youtu\.be)/)) {
+            videoUrl = q;
+            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
+            title = videoInfo.title;
+        } else {
+            // Search YouTube using API
+            const searchResponse = await axios.get(
+                `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=${encodeURIComponent(q)}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A&type=video`
+            );
             
-            // Fallback to YouTube if 7digital fails
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
+            if (!searchResponse.data.items.length) return await reply("❌ No results found!");
             
-            const videoUrl = search.videos[0].url;
-            const title = search.videos[0].title;
-            
-            await reply("⏳ *Downloading audio from YouTube...*");
-            
-            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-            const ytResponse = await axios.get(ytApiUrl);
-            
-            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
-            
-            await conn.sendMessage(from, {
-                audio: { url: ytResponse.data.result.download_url },
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-            
-            return await reply(`✅ *${title}* downloaded from YouTube!`);
+            videoUrl = `https://youtu.be/${searchResponse.data.items[0].id.videoId}`;
+            title = searchResponse.data.items[0].snippet.title;
         }
 
-        // Get the first track
-        const track = tracks[0];
-        const streamUrl = track.releases[0]?.track?.streamingUrl;
-        
-        if (!streamUrl) {
-            return await reply("❌ *Streaming not available for this track*");
-        }
+        await reply("⏳ Downloading audio...");
 
-        await reply(`🎧 *Now playing:* ${track.title} - ${track.artist.name}`);
+        // Use YouTube API to get audio
+        const downloadResponse = await axios.get(
+            `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoUrl.split(/[=/]/).pop()}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A`
+        );
 
-        // Send the audio stream
+        if (!downloadResponse.data.items) return await reply("❌ Failed to download audio!");
+
+        // Send audio file
         await conn.sendMessage(from, {
-            audio: { url: streamUrl },
+            audio: { url: videoUrl },
             mimetype: 'audio/mpeg',
-            ptt: false,
-            contextInfo: {
-                externalAdReply: {
-                    title: track.title,
-                    body: `by ${track.artist.name} | via 7digital`,
-                    thumbnail: await (await axios.get(track.image, { responseType: 'arraybuffer' })).data
-                }
-            }
+            ptt: false
         }, { quoted: mek });
 
+        await reply(`✅ *${title}* downloaded successfully!\n\nPowered by Irfan Ahmed`);
+
     } catch (error) {
-        console.error('Music API Error:', error);
-        await reply(`❌ *Error!* ${error.response?.data?.message || error.message}\nTrying YouTube fallback...`);
-        
-        // YouTube fallback
-        try {
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
-            
-            const videoUrl = search.videos[0].url;
-            const title = search.videos[0].title;
-            
-            await reply("⏳ *Downloading audio from YouTube...*");
-            
-            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-            const ytResponse = await axios.get(ytApiUrl);
-            
-            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
-            
-            await conn.sendMessage(from, {
-                audio: { url: ytResponse.data.result.download_url },
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-            
-            await reply(`✅ *${title}* downloaded from YouTube!`);
-        } catch (ytError) {
-            await reply("❌ *Failed to get music from all sources!* Please try again later.");
-        }
+        console.error(error);
+        await reply(`❌ Error: ${error.message}\n\nPowered by Irfan Ahmed`);
     }
 });
