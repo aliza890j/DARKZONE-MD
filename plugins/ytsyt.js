@@ -1,13 +1,16 @@
 const config = require('../config');
 const { cmd } = require('../command');
-const yts = require('yt-search');
-const axios = require('axios');
+const fetch = require('node-fetch');
+const ytdl = require('ytdl-core'); // Install with: npm install ytdl-core
+
+// YouTube API Key
+const YT_API_KEY = "AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A";
 
 cmd({
-    pattern: "son",
+    pattern: "song",
     alias: ["play", "music"],
     react: "🎵",
-    desc: "Download audio from YouTube",
+    desc: "Download audio from YouTube using Google API",
     category: "download",
     use: ".song <query or url>",
     filename: __filename
@@ -15,45 +18,85 @@ cmd({
     try {
         if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
 
-        let videoUrl, title;
-        
-        // Check if it's a URL
+        let videoId, title, thumbnailUrl;
+
+        // Process YouTube URL
         if (q.match(/(youtube\.com|youtu\.be)/)) {
-            videoUrl = q;
-            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
-            title = videoInfo.title;
-        } else {
-            // Search YouTube using API
-            const searchResponse = await axios.get(
-                `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=${encodeURIComponent(q)}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A&type=video`
-            );
+            try {
+                // Extract video ID from various URL formats
+                const urlObj = new URL(q.includes('://') ? q : 'https://' + q);
+                videoId = urlObj.hostname === 'youtu.be' 
+                    ? urlObj.pathname.slice(1)
+                    : urlObj.searchParams.get('v');
+                
+                if (!videoId || videoId.length !== 11) throw new Error("Invalid URL");
+            } catch (e) {
+                return await reply("❌ Invalid YouTube URL!");
+            }
+        } 
+        // Process search query
+        else {
+            await reply("🔍 Searching YouTube...");
+            const searchUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=1&q=${encodeURIComponent(q)}&key=${YT_API_KEY}&type=video`;
             
-            if (!searchResponse.data.items.length) return await reply("❌ No results found!");
+            const searchRes = await fetch(searchUrl);
+            const searchData = await searchRes.json();
             
-            videoUrl = `https://youtu.be/${searchResponse.data.items[0].id.videoId}`;
-            title = searchResponse.data.items[0].snippet.title;
+            if (!searchData.items || searchData.items.length === 0) {
+                return await reply("❌ No results found!");
+            }
+            
+            videoId = searchData.items[0].id.videoId;
         }
 
-        await reply("⏳ Downloading audio...");
+        // Get video details using your API key
+        const videoUrl = `https://www.googleapis.com/youtube/v3/videos?part=snippet,contentDetails&id=${videoId}&key=${YT_API_KEY}`;
+        const videoRes = await fetch(videoUrl);
+        const videoData = await videoRes.json();
+        
+        if (!videoData.items || videoData.items.length === 0) {
+            return await reply("❌ Video not found!");
+        }
+        
+        const videoInfo = videoData.items[0];
+        title = videoInfo.snippet.title;
+        thumbnailUrl = videoInfo.snippet.thumbnails.high.url;
+        
+        await reply(`⏳ Downloading: *${title}*`);
+        
+        // Download audio stream directly using ytdl-core
+        const audioStream = ytdl(`https://www.youtube.com/watch?v=${videoId}`, {
+            filter: 'audioonly',
+            quality: 'highestaudio',
+        });
 
-        // Use YouTube API to get audio
-        const downloadResponse = await axios.get(
-            `https://www.googleapis.com/youtube/v3/videos?part=contentDetails&id=${videoUrl.split(/[=/]/).pop()}&key=AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A`
-        );
-
-        if (!downloadResponse.data.items) return await reply("❌ Failed to download audio!");
-
-        // Send audio file
-        await conn.sendMessage(from, {
-            audio: { url: videoUrl },
-            mimetype: 'audio/mpeg',
-            ptt: false
-        }, { quoted: mek });
-
-        await reply(`✅ *${title}* downloaded successfully!\n\nPowered by Irfan Ahmed`);
+        // Collect audio chunks
+        const chunks = [];
+        audioStream.on('data', (chunk) => chunks.push(chunk));
+        audioStream.on('end', async () => {
+            const audioBuffer = Buffer.concat(chunks);
+            
+            await conn.sendMessage(
+                from, 
+                {
+                    audio: audioBuffer,
+                    mimetype: 'audio/mpeg',
+                    fileName: `${title.replace(/[^\w\s]/gi, '')}.mp3`,
+                    ptt: false
+                }, 
+                { quoted: mek }
+            );
+            
+            await reply(`✅ Download complete!\nPOWERED BY IRFAN AHMED`);
+        });
+        
+        audioStream.on('error', async (err) => {
+            console.error('Stream error:', err);
+            await reply(`❌ Download failed: ${err.message}`);
+        });
 
     } catch (error) {
-        console.error(error);
-        await reply(`❌ Error: ${error.message}\n\nPowered by Irfan Ahmed`);
+        console.error('Error:', error);
+        await reply(`❌ Error: ${error.message}`);
     }
 });
