@@ -7,7 +7,7 @@ const ytdl = require('ytdl-core'); // Install with: npm install ytdl-core
 const YT_API_KEY = "AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A";
 
 cmd({
-    pattern: "song",
+    pattern: "son",
     alias: ["play", "music"],
     react: "🎵",
     desc: "Download audio from YouTube using Google API",
