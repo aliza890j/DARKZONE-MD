@@ -2,15 +2,17 @@ const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
 const ytdl = require('ytdl-core');
-const { pipeline } = require('stream');
-const { promisify } = require('util');
-const streamPipeline = promisify(pipeline);
+const fs = require('fs');
+const { exec } = require('child_process');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('ffmpeg-static');
+const path = require('path');
 
 cmd({
     pattern: "son",
     alias: ["music", "download"],
     react: "🎵",
-    desc: "Download songs from YouTube",
+    desc: "Download high-quality songs from YouTube",
     category: "download",
     use: ".song <song name>",
     filename: __filename
@@ -18,7 +20,7 @@ cmd({
     try {
         if (!q) return await reply("❌ Please enter a song name!");
 
-        // Search YouTube
+        // Step 1: Search YouTube
         const search = await yts(q);
         if (!search.videos.length) return await reply("❌ No results found!");
         
@@ -27,56 +29,87 @@ cmd({
         const thumbnail = video.thumbnail;
         const videoUrl = video.url;
 
-        // Step 1: Send song photo
+        // Send song thumbnail and title
         await conn.sendMessage(from, {
             image: { url: thumbnail },
-            caption: `🎵 *${title}*\n\n_⬇️ Download starting..._`
+            caption: `🎵 *${title}*\n\n⬇️ Starting download...`
         }, { quoted: mek });
 
-        // Step 2: Process and send audio
-        await reply("⏳ Processing audio...");
+        // Step 2: Download and convert audio
+        await reply("⏳ Downloading and converting audio...");
+
+        // Create temporary files
+        const tempDir = './temp/';
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
         
-        const audioStream = ytdl(videoUrl, {
-            filter: 'audioonly',
+        const videoId = video.videoId;
+        const tempVideo = path.join(tempDir, `${videoId}.mp4`);
+        const tempAudio = path.join(tempDir, `${videoId}.mp3`);
+
+        // Download audio using ytdl-core with bypass
+        const videoStream = ytdl(videoUrl, {
             quality: 'highestaudio',
-            highWaterMark: 1 << 25 // 32MB buffer
-        });
-
-        const chunks = [];
-        audioStream.on('data', chunk => chunks.push(chunk));
-        audioStream.on('end', async () => {
-            const audioBuffer = Buffer.concat(chunks);
-            
-            await conn.sendMessage(from, {
-                audio: audioBuffer,
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-
-            // Step 3: Send footer with dark zone
-            const darkZone = '▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬▬';
-            await conn.sendMessage(from, {
-                text: `${darkZone}\n*Irfan Ahmad*\n${darkZone}`,
-                contextInfo: {
-                    externalAdReply: {
-                        title: "Song Downloader",
-                        body: "Completed Successfully",
-                        thumbnail: thumbnail,
-                        mediaType: 2,
-                        mediaUrl: videoUrl,
-                        sourceUrl: videoUrl
-                    }
+            filter: 'audioonly',
+            highWaterMark: 1 << 25,
+            requestOptions: {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Cookie': 'CONSENT=YES+cb.20210328-17-p0.en+FX+917;'
                 }
-            }, { quoted: mek });
+            }
         });
 
-        audioStream.on('error', async (err) => {
-            console.error(err);
-            await reply(`❌ Audio processing failed: ${err.message}`);
+        // Save to temporary file
+        const writeStream = fs.createWriteStream(tempVideo);
+        videoStream.pipe(writeStream);
+
+        // Wait for download to complete
+        await new Promise((resolve, reject) => {
+            writeStream.on('finish', resolve);
+            writeStream.on('error', reject);
         });
+
+        // Convert to MP3 using FFmpeg
+        await new Promise((resolve, reject) => {
+            ffmpeg(tempVideo)
+                .setFfmpegPath(ffmpegPath)
+                .audioBitrate(320)
+                .toFormat('mp3')
+                .on('end', resolve)
+                .on('error', reject)
+                .save(tempAudio);
+        });
+
+        // Step 3: Send audio
+        await conn.sendMessage(from, {
+            audio: fs.readFileSync(tempAudio),
+            mimetype: 'audio/mpeg',
+            fileName: `${title}.mp3`,
+            ptt: false
+        }, { quoted: mek });
+
+        // Step 4: Send dark zone footer
+        const darkZone = '⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛';
+        await conn.sendMessage(from, {
+            text: `${darkZone}\n*Irfan Ahmad*\n${darkZone}`,
+            contextInfo: {
+                externalAdReply: {
+                    title: "Song Downloader",
+                    body: "Download Complete!",
+                    thumbnail: fs.readFileSync(tempVideo),
+                    mediaType: 2,
+                    mediaUrl: videoUrl,
+                    sourceUrl: videoUrl
+                }
+            }
+        }, { quoted: mek });
+
+        // Cleanup temporary files
+        fs.unlinkSync(tempVideo);
+        fs.unlinkSync(tempAudio);
 
     } catch (error) {
-        console.error(error);
+        console.error('❌ Error:', error);
         await reply(`❌ Error: ${error.message}`);
     }
 });
