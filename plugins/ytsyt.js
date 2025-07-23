@@ -1,115 +1,119 @@
 const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
-const ytdl = require('ytdl-core');
-const fs = require('fs');
-const { exec } = require('child_process');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-const path = require('path');
+const axios = require('axios');
 
 cmd({
-    pattern: "son",
-    alias: ["music", "download"],
+    pattern: "musi",
+    alias: ["play", "song", "7digital"],
     react: "🎵",
-    desc: "Download high-quality songs from YouTube",
+    desc: "Search and stream music from 7digital API",
     category: "download",
-    use: ".song <song name>",
+    use: ".music <query>",
     filename: __filename
 }, async (conn, m, mek, { from, q, reply }) => {
     try {
-        if (!q) return await reply("❌ Please enter a song name!");
+        if (!q) return await reply("❌ *Please provide a song name!*\nExample: .music Shape of You");
 
-        // Step 1: Search YouTube
-        const search = await yts(q);
-        if (!search.videos.length) return await reply("❌ No results found!");
-        
-        const video = search.videos[0];
-        const title = video.title;
-        const thumbnail = video.thumbnail;
-        const videoUrl = video.url;
+        await reply("🔍 *Searching for your music...*");
 
-        // Send song thumbnail and title
-        await conn.sendMessage(from, {
-            image: { url: thumbnail },
-            caption: `🎵 *${title}*\n\n⬇️ Starting download...`
-        }, { quoted: mek });
-
-        // Step 2: Download and convert audio
-        await reply("⏳ Downloading and converting audio...");
-
-        // Create temporary files
-        const tempDir = './temp/';
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
-        
-        const videoId = video.videoId;
-        const tempVideo = path.join(tempDir, `${videoId}.mp4`);
-        const tempAudio = path.join(tempDir, `${videoId}.mp3`);
-
-        // Download audio using ytdl-core with bypass
-        const videoStream = ytdl(videoUrl, {
-            quality: 'highestaudio',
-            filter: 'audioonly',
-            highWaterMark: 1 << 25,
-            requestOptions: {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-                    'Cookie': 'CONSENT=YES+cb.20210328-17-p0.en+FX+917;'
-                }
+        // 7digital API configuration
+        const apiConfig = {
+            baseURL: 'https://api.7digital.com/1.2/',
+            headers: {
+                'accept': 'application/json',
+                'Authorization': `Bearer ${config.SEVENDIGITAL_API_KEY}` // Add your API key to config
+            },
+            params: {
+                q: q,
+                country: 'US',
+                pageSize: 5,
+                usageTypes: 'download,streaming'
             }
-        });
+        };
 
-        // Save to temporary file
-        const writeStream = fs.createWriteStream(tempVideo);
-        videoStream.pipe(writeStream);
+        // Search 7digital catalog
+        const searchResponse = await axios.get('track/search', apiConfig);
+        const tracks = searchResponse.data?.searchResults?.searchResult;
+        
+        if (!tracks || tracks.length === 0) {
+            return await reply("❌ *No results found on 7digital!* Trying YouTube instead...");
+            
+            // Fallback to YouTube if 7digital fails
+            const search = await yts(q);
+            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
+            
+            const videoUrl = search.videos[0].url;
+            const title = search.videos[0].title;
+            
+            await reply("⏳ *Downloading audio from YouTube...*");
+            
+            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
+            const ytResponse = await axios.get(ytApiUrl);
+            
+            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
+            
+            await conn.sendMessage(from, {
+                audio: { url: ytResponse.data.result.download_url },
+                mimetype: 'audio/mpeg',
+                ptt: false
+            }, { quoted: mek });
+            
+            return await reply(`✅ *${title}* downloaded from YouTube!`);
+        }
 
-        // Wait for download to complete
-        await new Promise((resolve, reject) => {
-            writeStream.on('finish', resolve);
-            writeStream.on('error', reject);
-        });
+        // Get the first track
+        const track = tracks[0];
+        const streamUrl = track.releases[0]?.track?.streamingUrl;
+        
+        if (!streamUrl) {
+            return await reply("❌ *Streaming not available for this track*");
+        }
 
-        // Convert to MP3 using FFmpeg
-        await new Promise((resolve, reject) => {
-            ffmpeg(tempVideo)
-                .setFfmpegPath(ffmpegPath)
-                .audioBitrate(320)
-                .toFormat('mp3')
-                .on('end', resolve)
-                .on('error', reject)
-                .save(tempAudio);
-        });
+        await reply(`🎧 *Now playing:* ${track.title} - ${track.artist.name}`);
 
-        // Step 3: Send audio
+        // Send the audio stream
         await conn.sendMessage(from, {
-            audio: fs.readFileSync(tempAudio),
+            audio: { url: streamUrl },
             mimetype: 'audio/mpeg',
-            fileName: `${title}.mp3`,
-            ptt: false
-        }, { quoted: mek });
-
-        // Step 4: Send dark zone footer
-        const darkZone = '⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛';
-        await conn.sendMessage(from, {
-            text: `${darkZone}\n*Irfan Ahmad*\n${darkZone}`,
+            ptt: false,
             contextInfo: {
                 externalAdReply: {
-                    title: "Song Downloader",
-                    body: "Download Complete!",
-                    thumbnail: fs.readFileSync(tempVideo),
-                    mediaType: 2,
-                    mediaUrl: videoUrl,
-                    sourceUrl: videoUrl
+                    title: track.title,
+                    body: `by ${track.artist.name} | via 7digital`,
+                    thumbnail: await (await axios.get(track.image, { responseType: 'arraybuffer' })).data
                 }
             }
         }, { quoted: mek });
 
-        // Cleanup temporary files
-        fs.unlinkSync(tempVideo);
-        fs.unlinkSync(tempAudio);
-
     } catch (error) {
-        console.error('❌ Error:', error);
-        await reply(`❌ Error: ${error.message}`);
+        console.error('Music API Error:', error);
+        await reply(`❌ *Error!* ${error.response?.data?.message || error.message}\nTrying YouTube fallback...`);
+        
+        // YouTube fallback
+        try {
+            const search = await yts(q);
+            if (!search.videos.length) return await reply("❌ *No results found anywhere!*");
+            
+            const videoUrl = search.videos[0].url;
+            const title = search.videos[0].title;
+            
+            await reply("⏳ *Downloading audio from YouTube...*");
+            
+            const ytApiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
+            const ytResponse = await axios.get(ytApiUrl);
+            
+            if (!ytResponse.data.success) return await reply("❌ *Failed to download audio!*");
+            
+            await conn.sendMessage(from, {
+                audio: { url: ytResponse.data.result.download_url },
+                mimetype: 'audio/mpeg',
+                ptt: false
+            }, { quoted: mek });
+            
+            await reply(`✅ *${title}* downloaded from YouTube!`);
+        } catch (ytError) {
+            await reply("❌ *Failed to get music from all sources!* Please try again later.");
+        }
     }
 });
