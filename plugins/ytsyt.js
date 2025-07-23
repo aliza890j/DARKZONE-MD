@@ -2,54 +2,42 @@ const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
 
-// Initialize YouTube API client
-const youtube = google.youtube({
-    version: 'v3',
-    auth: 'AIzaSyDrGpiGkRu71pXUe1xnWdFWe3GEaxtWV_A' // Your provided API key
-});
-
 cmd({
     pattern: "son",
-    alias: ["music", "play"],
+    alias: ["music", "download"],
     react: "🎵",
-    desc: "Search and download a song from YouTube with thumbnail and credits",
+    desc: "Download songs from YouTube",
     category: "download",
     use: ".song <song name>",
     filename: __filename
 }, async (conn, m, mek, { from, q, reply }) => {
     try {
-        if (!q) return await reply("❌ Please provide a song name!");
+        if (!q) return await reply("❌ Please enter a song name!");
 
-        await reply("🔍 Searching for the song...");
+        // Search YouTube
+        const search = await yts(q);
+        if (!search.videos.length) return await reply("❌ No results found!");
+        
+        const video = search.videos[0];
+        const title = video.title;
+        const thumbnail = video.thumbnail;
+        const videoUrl = video.url;
 
-        // Search YouTube using YouTube Data API
-        const searchResponse = await youtube.search.list({
-            part: 'snippet',
-            q: q,
-            maxResults: 1,
-            type: 'video'
-        });
-
-        if (!searchResponse.data.items.length) return await reply("❌ No results found!");
-
-        const video = searchResponse.data.items[0];
-        const videoId = video.id.videoId;
-        const title = video.snippet.title;
-        const thumbnail = video.snippet.thumbnails.high.url;
-        const videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-
-        // Send thumbnail
+        // Send song photo
         await conn.sendMessage(from, {
             image: { url: thumbnail },
-            caption: `🎵 *${title}*\n\nDownloading your song...`
+            caption: `🎵 *${title}*`
         }, { quoted: mek });
 
-        // Use external API to download audio
+        // Downloading message
+        await reply("⏳ Downloading your song...");
+
+        // Download audio using API
         const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
         const response = await fetch(apiUrl);
         const data = await response.json();
 
-        if (!data.success) return await reply("❌ Failed to download audio!");
+        if (!data.success) return await reply("❌ Download failed!");
 
         // Send audio
         await conn.sendMessage(from, {
@@ -58,11 +46,27 @@ cmd({
             ptt: false
         }, { quoted: mek });
 
-        // Send credits
-        await reply(`✅ *${title}* downloaded successfully!\n\n*Credits:*\n- DarkZone\n- Irfan Ahmad`);
+        // Send footer with dark zone
+        const darkZone = `
+┌─\n│\n│\n│\n╰────────────
+`.repeat(5);
+        
+        await conn.sendMessage(from, {
+            text: `${darkZone}\n*Irfan Ahmad*\n${darkZone}`,
+            contextInfo: {
+                externalAdReply: {
+                    title: "Song Downloader",
+                    body: "Completed Successfully",
+                    thumbnail: await (await fetch(thumbnail)).buffer(),
+                    mediaType: 2,
+                    mediaUrl: videoUrl,
+                    sourceUrl: videoUrl
+                }
+            }
+        }, { quoted: mek });
 
     } catch (error) {
         console.error(error);
         await reply(`❌ Error: ${error.message}`);
     }
-}); 
+});
