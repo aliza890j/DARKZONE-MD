@@ -1,7 +1,6 @@
 const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
-const { google } = require('googleapis');
 
 // Initialize YouTube API client
 const youtube = google.youtube({
