@@ -1,9 +1,10 @@
 const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
+const axios = require('axios');
 
 cmd({
-    pattern: "son",
+    pattern: "ytg",
     alias: ["play2", "music"],
     react: "🎵",
     desc: "Download audio from YouTube",
@@ -39,27 +40,39 @@ cmd({
             caption: `🎵 *${title}*`
         }, { quoted: mek });
 
-        // Use API to get audio
+        // Use API to get audio with better error handling
         const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-        const response = await fetch(apiUrl);
-        const data = await response.json();
+        
+        try {
+            const response = await axios.get(apiUrl, {
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
 
-        if (!data.success) return await reply("❌ Failed to download audio!");
+            if (!response.data || !response.data.success) {
+                return await reply("❌ Failed to download audio: Invalid API response");
+            }
 
-        // Then send audio
-        await conn.sendMessage(from, {
-            audio: { url: data.result.download_url },
-            mimetype: 'audio/mpeg',
-            ptt: false
-        }, { quoted: mek });
+            // Then send audio
+            await conn.sendMessage(from, {
+                audio: { url: response.data.result.download_url },
+                mimetype: 'audio/mpeg',
+                ptt: false
+            }, { quoted: mek });
 
-        // Finally send the footer message
-        await conn.sendMessage(from, {
-            text: "Power of the Dark Zone MD"
-        }, { quoted: mek });
+            // Finally send the footer message
+            await conn.sendMessage(from, {
+                text: "Power of the Dark Zone MD"
+            }, { quoted: mek });
+
+        } catch (apiError) {
+            console.error('API Error:', apiError);
+            return await reply(`❌ API Error: ${apiError.message}`);
+        }
 
     } catch (error) {
-        console.error(error);
+        console.error('Main Error:', error);
         await reply(`❌ Error: ${error.message}`);
     }
 });
