@@ -179,7 +179,7 @@ async (conn, mek, m, { from, l, quoted, body, isCmd, command, args, q, isGroup, 
 });
 
 cmd({
-    pattern: "stpp",
+    pattern: "setpp",
     desc: "Set bot profile picture.",
     category: "privacy",
     react: "🖼️",
