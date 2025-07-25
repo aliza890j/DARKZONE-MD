@@ -1,78 +1,71 @@
-const config = require('../config');
-const { cmd } = require('../command');
-const yts = require('yt-search');
-const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
+const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
 
-cmd({
-    pattern: "ytg",
-    alias: ["play2", "music"],
-    react: "🎵",
-    desc: "Download audio from YouTube",
-    category: "download",
-    use: ".song <query or url>",
-    filename: __filename
-}, async (conn, m, mek, { from, q, reply }) => {
+async function setProfilePicture(sock, chatId, msg) {
     try {
-        if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
-
-        let videoUrl, title, thumbnail;
-        
-        // Check if it's a URL
-        if (q.match(/(youtube\.com|youtu\.be)/)) {
-            videoUrl = q;
-            const videoInfo = await yts({ videoId: q.split(/[=/]/).pop() });
-            title = videoInfo.title;
-            thumbnail = videoInfo.thumbnail;
-        } else {
-            // Search YouTube
-            const search = await yts(q);
-            if (!search.videos.length) return await reply("❌ No results found!");
-            videoUrl = search.videos[0].url;
-            title = search.videos[0].title;
-            thumbnail = search.videos[0].thumbnail;
-        }
-
-        await reply("⏳ Downloading audio...");
-
-        // First send thumbnail
-        await conn.sendMessage(from, {
-            image: { url: thumbnail },
-            caption: `🎵 *${title}*`
-        }, { quoted: mek });
-
-        // Use API to get audio with better error handling
-        const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
-        
-        try {
-            const response = await axios.get(apiUrl, {
-                headers: {
-                    'Accept': 'application/json'
-                }
+        // Check if user is owner
+        const isOwner = msg.key.fromMe;
+        if (!isOwner) {
+            await sock.sendMessage(chatId, { 
+                text: '❌ This command is only available for the owner!' 
             });
-
-            if (!response.data || !response.data.success) {
-                return await reply("❌ Failed to download audio: Invalid API response");
-            }
-
-            // Then send audio
-            await conn.sendMessage(from, {
-                audio: { url: response.data.result.download_url },
-                mimetype: 'audio/mpeg',
-                ptt: false
-            }, { quoted: mek });
-
-            // Finally send the footer message
-            await conn.sendMessage(from, {
-                text: "Power of the Dark Zone MD"
-            }, { quoted: mek });
-
-        } catch (apiError) {
-            console.error('API Error:', apiError);
-            return await reply(`❌ API Error: ${apiError.message}`);
+            return;
         }
+
+        // Check if message is a reply
+        const quotedMessage = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+        if (!quotedMessage) {
+            await sock.sendMessage(chatId, { 
+                text: '⚠️ Please reply to an image with the .setpp command!' 
+            });
+            return;
+        }
+
+        // Check if quoted message contains an image
+        const imageMessage = quotedMessage.imageMessage || quotedMessage.stickerMessage;
+        if (!imageMessage) {
+            await sock.sendMessage(chatId, { 
+                text: '❌ The replied message must contain an image!' 
+            });
+            return;
+        }
+
+        // Create tmp directory if it doesn't exist
+        const tmpDir = path.join(process.cwd(), 'tmp');
+        if (!fs.existsSync(tmpDir)) {
+            fs.mkdirSync(tmpDir, { recursive: true });
+        }
+
+        // Download the image
+        const stream = await downloadContentFromMessage(imageMessage, 'image');
+        let buffer = Buffer.from([]);
+        
+        for await (const chunk of stream) {
+            buffer = Buffer.concat([buffer, chunk]);
+        }
+
+        const imagePath = path.join(tmpDir, `profile_${Date.now()}.jpg`);
+        
+        // Save the image
+        fs.writeFileSync(imagePath, buffer);
+
+        // Set the profile picture
+        await sock.updateProfilePicture(sock.user.id, { url: imagePath });
+
+        // Clean up the temporary file
+        fs.unlinkSync(imagePath);
+
+        await sock.sendMessage(chatId, { 
+            text: '✅ Successfully updated bot profile picture!' 
+        });
 
     } catch (error) {
-        console.error('Main Error:', error);
-        await reply(`❌ Error: ${error.message}`);
+        console.error('Error in setpp command:', error);
+        await sock.sendMessage(chatId, { 
+            text: '❌ Failed to update profile picture!' 
+        });
     }
-});
+}
+
+module.exports = setProfilePicture; 
