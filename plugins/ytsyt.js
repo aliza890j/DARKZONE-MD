@@ -55,7 +55,7 @@ const savetube = {
 };
 
 cmd({
-    pattern: "song",
+    pattern: "son",
     alias: ["play", "music", "yt"],
     react: "🎵",
     desc: "Download audio from YouTube",
