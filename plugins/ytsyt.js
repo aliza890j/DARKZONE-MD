@@ -3,6 +3,7 @@ const { cmd } = require('../command');
 const yts = require('yt-search');
 const axios = require('axios');
 const fs = require('fs');
+const path = require('path');
 
 cmd({
     pattern: "son",
@@ -42,15 +43,26 @@ cmd({
 
         if (!data.downloadUrl) throw new Error("Failed to fetch download link");
 
-        // Download and send audio
-        const tempFile = `./temp/${Date.now()}.mp3`;
+        // Download and send audio (FIXED PART)
+        const tempDir = path.join(__dirname, '../temp');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+        
+        const tempFile = path.join(tempDir, `${Date.now()}.mp3`);
+        const writer = fs.createWriteStream(tempFile);
         const audioStream = await axios.get(data.downloadUrl, { responseType: "stream" });
-        audioStream.data.pipe(fs.createWriteStream(tempFile));
-
-        await message.reply({
-            audio: { url: tempFile },
-            mimetype: "audio/mpeg"
+        
+        // Wait for download to complete
+        await new Promise((resolve, reject) => {
+            audioStream.data.pipe(writer);
+            writer.on('finish', resolve);
+            writer.on('error', reject);
         });
+
+        await client.sendMessage(message.jid, {
+            audio: fs.readFileSync(tempFile),
+            mimetype: "audio/mpeg",
+            ptt: false
+        }, { quoted: message });
 
         // Cleanup
         setTimeout(() => fs.unlinkSync(tempFile), 5000);
