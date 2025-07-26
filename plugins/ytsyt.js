@@ -38,18 +38,44 @@ const savetube = {
         }
         return null
     },
-    download: async (url, type = 'mp3') => {
-        // This would be your actual savetube download implementation
-        // For now, we'll mock it with the API you provided earlier
+    
+        // Download using savetube
+        let result;
         try {
-            const apiUrl = `https://api.davidcyriltech.my.id/download/yt${type === 'mp3' ? 'mp3' : 'mp4'}?url=${encodeURIComponent(url)}`;
-            const response = await fetch(apiUrl);
-            return await response.json();
-        } catch (error) {
-            throw error;
+            result = await savetube.download(videoUrl, 'mp3');
+        } catch (err) {
+            return await sock.sendMessage(chatId, { text: "Failed to fetch download link. Try again later." });
         }
-    }
-};
+        if (!result || !result.status || !result.result || !result.result.download) {
+            return await sock.sendMessage(chatId, { text: "Failed to get a valid download link from the API." });
+        }
+
+        // Send thumbnail and title first
+        let sentMsg;
+        try {
+            sentMsg = await sock.sendMessage(chatId, {
+                image: { url: result.result.thumbnail },
+                caption: `*${result.result.title}*\n\n> _Downloading your song..._\n > *_By Knight Bot MD_*`
+            }, { quoted: message });
+        } catch (e) {
+            // If thumbnail fails, fallback to just sending the audio
+            sentMsg = message;
+        }
+
+        // Download the MP3 file
+        const tempDir = path.join(__dirname, '../temp');
+        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
+        const tempFile = path.join(tempDir, `${Date.now()}.mp3`);
+        const response = await axios({ url: result.result.download, method: 'GET', responseType: 'stream' });
+        if (response.status !== 200) {
+            return await sock.sendMessage(chatId, { text: "Failed to download the song file from the server." });
+        }
+        const writer = fs.createWriteStream(tempFile);
+        response.data.pipe(writer);
+        await new Promise((resolve, reject) => {
+            writer.on('finish', resolve);
+            writer.on('error', reject);
+        });
 
 cmd({
     pattern: "son",
