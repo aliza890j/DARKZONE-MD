@@ -1,72 +1,125 @@
 const config = require('../config');
 const { cmd } = require('../command');
 const yts = require('yt-search');
-const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+const crypto = require('crypto');
+const fetch = require('node-fetch');
+
+// Savetube utility functions
+const savetube = {
+    crypto: {
+        hexToBuffer: (hex) => Buffer.from(hex, 'hex')
+    },
+    decrypt: async (enc) => {
+        try {
+            const secretKey = 'C5D58EF67A7584E4A29F6C35BBC4EB12';
+            const data = Buffer.from(enc, 'base64');
+            const iv = data.slice(0, 16);
+            const content = data.slice(16);
+            const key = savetube.crypto.hexToBuffer(secretKey);
+            const decipher = crypto.createDecipheriv('aes-128-cbc', key, iv);
+            let decrypted = decipher.update(content);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            return JSON.parse(decrypted.toString());
+        } catch (error) {
+            throw new Error(error)
+        }
+    },
+    youtube: url => {
+        if (!url) return null;
+        const a = [
+            /youtube\.com\/watch\?v=([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/embed\/([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+            /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+            /youtu\.be\/([a-zA-Z0-9_-]{11})/
+        ];
+        for (let b of a) {
+            if (b.test(url)) return url.match(b)[1];
+        }
+        return null
+    },
+    download: async (url, type = 'mp3') => {
+        // This would be your actual savetube download implementation
+        // For now, we'll mock it with the API you provided earlier
+        try {
+            const apiUrl = `https://api.davidcyriltech.my.id/download/yt${type === 'mp3' ? 'mp3' : 'mp4'}?url=${encodeURIComponent(url)}`;
+            const response = await fetch(apiUrl);
+            return await response.json();
+        } catch (error) {
+            throw error;
+        }
+    }
+};
 
 cmd({
     pattern: "son",
-    alias: ["yt", "ytaudio"],
+    alias: ["play", "music", "yt"],
+    react: "🎵",
     desc: "Download audio from YouTube",
     category: "download",
-    use: "<song name or YouTube URL>",
-    react: "🎶"
-}, async (message, client, args) => {
+    use: ".song <query or url>",
+    filename: __filename
+}, async (conn, m, mek, { from, q, reply }) => {
     try {
-        if (!args[0]) return message.reply("Please provide a song name or YouTube URL!");
+        if (!q) return await reply("❌ Please provide a song name or YouTube URL!");
 
-        let videoUrl, videoInfo;
-
-        // Check if input is a URL
-        if (args[0].match(/youtube\.com|youtu\.be/)) {
-            videoUrl = args[0];
-            const videoId = videoUrl.match(/(?:v=|\/)([a-zA-Z0-9_-]{11})/)[1];
-            videoInfo = await yts({ videoId });
-        } 
-        // Search YouTube if not a URL
-        else {
-            const searchResults = await yts(args.join(" "));
-            if (!searchResults.videos.length) return message.reply("No results found!");
-            videoUrl = searchResults.videos[0].url;
-            videoInfo = searchResults.videos[0];
+        let videoUrl, title;
+        
+        // Check if it's a URL
+        if (q.match(/(youtube\.com|youtu\.be)/)) {
+            videoUrl = q;
+            const videoId = savetube.youtube(q);
+            if (!videoId) return await reply("❌ Invalid YouTube URL!");
+            const videoInfo = await yts({ videoId });
+            title = videoInfo.title;
+        } else {
+            // Search YouTube
+            const search = await yts(q);
+            if (!search.videos.length) return await reply("❌ No results found!");
+            videoUrl = search.videos[0].url;
+            title = search.videos[0].title;
         }
 
-        // Send thumbnail + metadata
-        await message.reply(`🎧 *${videoInfo.title}*\n⬇️ Downloading...`, {
-            thumbnail: videoInfo.thumbnail
-        });
+        await reply("⏳ Downloading audio... Please wait...");
 
-        // Fetch download link from API (e.g., savetube.me)
-        const apiUrl = `https://api.savetube.me/download?url=${encodeURIComponent(videoUrl)}`;
-        const { data } = await axios.get(apiUrl);
+        // Try savetube download first
+        let result;
+        try {
+            result = await savetube.download(videoUrl, 'mp3');
+            
+            if (!result || !result.status || !result.result || !result.result.download_url) {
+                throw new Error("Savetube download failed");
+            }
+            
+            await conn.sendMessage(from, {
+                audio: { url: result.result.download_url },
+                mimetype: 'audio/mpeg',
+                ptt: false
+            }, { quoted: mek });
 
-        if (!data.downloadUrl) throw new Error("Failed to fetch download link");
+            return await reply(`✅ *${title}* downloaded successfully!`);
+            
+        } catch (savetubeError) {
+            console.log("Savetube failed, falling back to API", savetubeError);
+            
+            // Fallback to the original API
+            const apiUrl = `https://api.davidcyriltech.my.id/download/ytmp3?url=${encodeURIComponent(videoUrl)}`;
+            const response = await fetch(apiUrl);
+            const data = await response.json();
 
-        // Download and send audio (FIXED PART)
-        const tempDir = path.join(__dirname, '../temp');
-        if (!fs.existsSync(tempDir)) fs.mkdirSync(tempDir);
-        
-        const tempFile = path.join(tempDir, `${Date.now()}.mp3`);
-        const writer = fs.createWriteStream(tempFile);
-        const audioStream = await axios.get(data.downloadUrl, { responseType: "stream" });
-        
-        // Wait for download to complete
-        await new Promise((resolve, reject) => {
-            audioStream.data.pipe(writer);
-            writer.on('finish', resolve);
-            writer.on('error', reject);
-        });
+            if (!data.success) return await reply("❌ Failed to download audio!");
 
-        await client.sendMessage(message.jid, {
-            audio: fs.readFileSync(tempFile),
-            mimetype: "audio/mpeg",
-            ptt: false
-        }, { quoted: message });
+            await conn.sendMessage(from, {
+                audio: { url: data.result.download_url },
+                mimetype: 'audio/mpeg',
+                ptt: false
+            }, { quoted: mek });
 
-        // Cleanup
-        setTimeout(() => fs.unlinkSync(tempFile), 5000);
-    } catch (err) {
-        message.reply(`❌ Error: ${err.message}`);
+            return await reply(`✅ *${title}* downloaded successfully!`);
+        }
+
+    } catch (error) {
+        console.error(error);
+        await reply(`❌ Error: ${error.message}`);
     }
 });
