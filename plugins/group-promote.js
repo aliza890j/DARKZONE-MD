@@ -8,37 +8,34 @@ cmd({
     react: "⬆️",
     filename: __filename
 },
-async(conn, mek, m, {
-    from, l, quoted, body, isCmd, command, args, q, isGroup, sender, senderNumber, botNumber2, botNumber, pushname, isMe, isOwner, groupMetadata, groupName, participants, groupAdmins, isBotAdmins, isCreator, isDev, isAdmins, reply
-}) => {
-    // Check if the command is used in a group
-    if (!isGroup) return reply("❌ This command can only be used in groups.");
-
-    // Check if the user is an admin
-    if (!isAdmins) return reply("❌ Only group admins can use this command.");
-
-    // Check if the bot is an admin
-    if (!isBotAdmins) return reply("❌ I need to be an admin to use this command.");
-
-    let number;
-    if (m.quoted) {
-        number = m.quoted.sender.split("@")[0]; // If replying to a message, get the sender's number
-    } else if (q && q.includes("@")) {
-        number = q.replace(/[@\s]/g, ''); // If manually typing a number
-    } else {
-        return reply("❌ Please reply to a message or provide a number to promote.");
-    }
-
-    // Prevent promoting the bot itself
-    if (number === botNumber) return reply("❌ The bot cannot promote itself.");
-
-    const jid = number + "@s.whatsapp.net";
-
+async (Void, citel, text) => {
     try {
-        await conn.groupParticipantsUpdate(from, [jid], "promote");
-        reply(`✅ Successfully promoted @${number} to admin.`, { mentions: [jid] });
+        if (!citel.isGroup) return citel.reply("❌ This command only works in groups!");
+        
+        // Check if sender is admin
+        const groupAdmins = await Void.groupMetadata(citel.chat).then(m => m.participants.filter(p => p.admin).map(p => p.id));
+        if (!groupAdmins.includes(citel.sender)) return citel.reply("❌ Only admins can promote members!");
+
+        // Get target user
+        let target;
+        if (citel.quoted) {
+            target = citel.quoted.sender;
+        } else if (citel.mentionedJid && citel.mentionedJid[0]) {
+            target = citel.mentionedJid[0];
+        } else {
+            return citel.reply("❌ Please reply to a message or mention a user!");
+        }
+
+        // Promote the user
+        await Void.groupParticipantsUpdate(citel.chat, [target], "promote");
+        
+        // Success message with mention
+        return citel.reply(`✅ @${target.split('@')[0]} has been promoted to admin!`, { 
+            mentions: [target] 
+        });
+
     } catch (error) {
-        console.error("Promote command error:", error);
-        reply("❌ Failed to promote the member.");
+        console.error("Promote Error:", error);
+        return citel.reply("❌ Failed to promote user. Please try again.");
     }
 });
