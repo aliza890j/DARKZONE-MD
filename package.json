@@ -9,7 +9,7 @@
     "restart": "pm2 restart DARKZONE-MD"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.4.1",
+    "@whiskeysockets/baileys": "^6.6.0"
     "@adiwajshing/keyed-db": "^0.2.4",
     "@dark-yasiya/yt-dl.js": "1.0.5",
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
@@ -49,7 +49,6 @@
     "sqlite3": "^5.1.7",
     "vm": "^0.1.0",
     "api-dylux":"1.8.5",
-    "@whiskeysockets/baileys": "git+https://gitlab.com/amilaKumara/baileys-pmd.git",
     "@mrnima/tiktok-downloader":"1.0.0",
     "@mrnima/facebook-downloader":"1.0.0",
     "mrnima-moviedl":"1.0.0"
