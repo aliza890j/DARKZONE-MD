@@ -11,7 +11,7 @@
     "update-baileys": "npm install @whiskeysockets/baileys@latest"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "6.8.1",  // LATEST STABLE
+    "@whiskeysockets/baileys": "6.8.1",  
     "pino": "^8.17.0",
     "pm2": "^5.3.1",
     "axios": "^1.6.2",
