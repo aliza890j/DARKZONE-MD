@@ -97,36 +97,18 @@ async (conn, mek, m, { from, isOwner, reply }) => {
 
 cmd({
     pattern: "getbio",
-    desc: "Get any user's bio (even if private)",
+    desc: "Displays the user's bio.",
     category: "privacy",
-    filename: __filename
-}, async (Void, citel, text) => {
+    filename: __filename,
+}, async (conn, mek, m, { args, reply }) => {
     try {
-        // Get target user (replied/mentioned/sender)
-        const target = citel.quoted ? citel.quoted.sender : 
-                     citel.mentionedJid?.[0] || citel.sender;
-
-        if (!target) return citel.reply("❌ Mention or reply to a user!");
-
-        // Forcefully fetch bio (bypass privacy)
-        const bio = await Void.fetchStatus(target).catch((e) => {
-            console.error("[BIO FETCH ERROR]", e);
-            return null;
-        });
-
-        // If still no bio, check via alternative method
-        if (!bio?.status) {
-            return citel.reply("🔒 User has no bio or it's hidden.");
-        }
-
-        // Send the bio
-        await citel.reply(`📝 *Bio of @${target.split('@')[0]}*:\n\n${bio.status}\n`, {
-            mentions: [target]
-        });
-
-    } catch (err) {
-        console.error("[BIO CMD ERROR]", err);
-        citel.reply("❌ Failed to fetch bio (server blocked the request).");
+        const jid = args[0] || mek.key.remoteJid;
+        const about = await conn.fetchStatus?.(jid);
+        if (!about) return reply("No bio found.");
+        return reply(`User Bio:\n\n${about.status}`);
+    } catch (error) {
+        console.error("Error in bio command:", error);
+        reply("No bio found.");
     }
 });
 cmd({
@@ -316,33 +298,30 @@ async (conn, mek, m, { from, l, quoted, body, isCmd, command, args, q, isGroup, 
 });
 cmd({
     pattern: "getpp",
-    desc: "Get profile picture of mentioned/replied user",
+    desc: "Fetch the profile picture of a tagged or replied user.",
     category: "owner",
     filename: __filename
-}, async (Void, citel, text, { isCreator, isGroup }) => {
+}, async (conn, mek, m, { quoted, isGroup, sender, participants, reply }) => {
     try {
-        // Get the target user (replied or mentioned)
-        let target = citel.quoted ? citel.quoted.sender : citel.mentionedJid ? citel.mentionedJid[0] : citel.sender;
-        
-        if (!target) return citel.reply("Please mention a user or reply to their message");
-        
-        // Fetch profile picture with error handling
-        let ppUrl;
-        try {
-            ppUrl = await Void.profilePictureUrl(target, "image");
-        } catch {
-            return citel.reply("Couldn't fetch profile picture. The user might have no profile photo or it's private.");
-        }
-        
-        // Send the image
-        await Void.sendMessage(citel.chat, {
-            image: { url: ppUrl },
-            caption: `Profile picture of @${target.split('@')[0]}`,
-            mentions: [target]
-        }, { quoted: citel });
-        
-    } catch (error) {
-        console.error("[PP ERROR]", error);
-        citel.reply("An error occurred while fetching the profile picture");
+        // Determine the target user
+        const targetJid = quoted ? quoted.sender : sender;
+
+        if (!targetJid) return reply("⚠️ Please reply to a message to fetch the profile picture.");
+
+        // Fetch the user's profile picture URL
+        const userPicUrl = await conn.profilePictureUrl(targetJid, "image").catch(() => null);
+
+        if (!userPicUrl) return reply("⚠️ No profile picture found for the specified user.");
+
+        // Send the user's profile picture
+        await conn.sendMessage(m.chat, {
+            image: { url: userPicUrl },
+            caption: "🖼️ Here is the profile picture of the specified user."
+        });
+    } catch (e) {
+        console.error("Error fetching user profile picture:", e);
+        reply("❌ An error occurred while fetching the profile picture. Please try again later.");
     }
 });
+
+          
